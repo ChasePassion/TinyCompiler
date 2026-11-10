@@ -60,14 +60,36 @@ foreach(definition ${LLVM_DEFINITIONS})
 endforeach()
 target_compile_definitions(TinyCompiler PRIVATE ${LLVM_DEFINITIONS_CLEAN})
 
-# 链接 LLVM。优先用 LLVMConfig.cmake 提供的导出目标
-if(TARGET LLVM)
-    target_link_libraries(TinyCompiler PRIVATE LLVM)
-else()
-    # core/support/irreader/passes 是编译器核心，native 是本机目标的后端（x86）
-    llvm_map_components_to_libnames(LLVM_LIBS core support irreader passes native)
-    target_link_libraries(TinyCompiler PRIVATE ${LLVM_LIBS})
-endif()
+# 链接 LLVM。
+#
+# 注意这里不要用 LLVMConfig.cmake 导出的 LLVM 伞形目标：它把 clang / lld
+# 也算进来，而那些库引用了 DIA SDK（只有完整版 Visual Studio 才装）。
+# 只链真正用到的组件就没这个问题。
+llvm_map_components_to_libnames(LLVM_LIBS core support irreader passes native)
+
+# LLVM 官方发布的 Windows 包里，LLVMDebugInfoCodeView 的接口带了一个
+# 「构建 LLVM 的那台机器上」的 DIA SDK 绝对路径，换台机器就找不到这个文件了
+# （实际上 LLVM 的库并不真的用到 DIA 的符号）。这里把指向不存在文件的
+# 绝对路径去掉。
+foreach(_llvm_lib LLVMDebugInfoCodeView LLVMDebugInfoPDB)
+    if(TARGET ${_llvm_lib})
+        get_target_property(_llvm_iface ${_llvm_lib} INTERFACE_LINK_LIBRARIES)
+        if(_llvm_iface)
+            set(_llvm_fixed "")
+            foreach(_dep ${_llvm_iface})
+                if(_dep MATCHES "^[A-Za-z]:/" AND NOT EXISTS "${_dep}")
+                    message(STATUS "去掉指向不存在文件的依赖: ${_dep}")
+                else()
+                    list(APPEND _llvm_fixed ${_dep})
+                endif()
+            endforeach()
+            set_target_properties(${_llvm_lib} PROPERTIES
+                                  INTERFACE_LINK_LIBRARIES "${_llvm_fixed}")
+        endif()
+    endif()
+endforeach()
+
+target_link_libraries(TinyCompiler PRIVATE ${LLVM_LIBS})
 
 # Windows 下 LLVM 的静态库依赖几个系统库
 if(WIN32)

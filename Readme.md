@@ -24,17 +24,60 @@
 | CMake | 3.20+ | 构建 |
 | C++ 编译器 | 支持 C++17 | MSVC 2019+ / GCC 7+ / Clang 6+ |
 
-> **注意**：LLVM 官方的 Windows 安装包（`LLVM-22.1.8-win64.exe`）里**只有 C API**
-> （`llvm-c/*.h` 和 `LLVM-C.lib`），**不含 `llvm/IR/*.h` 这套 C++ 头文件**，
-> 所以不能直接用来链接本项目。Windows 上推荐用 conda-forge 的 `llvmdev`：
->
-> ```powershell
-> conda create -n tinycompiler -c conda-forge llvmdev=22 zlib zstd
-> conda activate tinycompiler
-> ```
->
-> flex / bison 在 Windows 上用 [winflexbison](https://github.com/lexxmark/winflexbison)
-> （提供 `win_flex.exe` 和 `win_bison.exe`）。
+#### LLVM 去哪拿（Windows 上有个坑）
+
+LLVM 官方在 Windows 上发的是**两个不同的包**，内容差别很大：
+
+| 资产 | 大小 | 含 C++ 头文件？ | 说明 |
+| --- | --- | --- | --- |
+| `LLVM-22.1.8-win64.exe` | 434 MB | ❌ **没有** | 官方安装包，只有 `llvm-c/` 和 clang 工具链 |
+| `clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz` | 822 MB | ✅ **有** | CI 用的完整包，含 `include/llvm/**`、145 个静态库、`LLVMConfig.cmake` |
+
+官方安装包不含 C++ 开发文件是**有意为之**，LLVM 官方论坛上的原话：
+
+> The pre-built LLVM installer for Windows only contains the toolchain parts:
+> clang, lld, compiler-rt libraries, etc. If you need the LLVM libraries,
+> the best way is to build them yourself.
+> —— [How to compile the C file that uses LLVM on Windows?](https://discourse.llvm.org/t/how-to-compile-the-c-file-that-uses-llvm-on-windows/72642)
+
+所以在 Windows 上有三条路可选，**推荐第 1 条**：
+
+**① 官方 tar.xz（推荐，最"正统"）**
+
+```powershell
+# 下载（走代理的话加上 --proxy）
+curl -L -o llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz
+# 解压后目录结构是 clang+llvm-22.1.8-x86_64-pc-windows-msvc/{bin,include,lib}
+```
+
+这个包解压后自带 `llvm-config.exe`、`LLVMConfig.cmake`、完整的头文件和静态库，
+而且**不依赖 zlib/zstd 动态库**（编出来的 exe 只依赖系统 DLL）。
+
+**② conda-forge**
+
+```powershell
+conda create -n tinycompiler -c conda-forge llvmdev=22 zlib zstd
+conda activate tinycompiler
+```
+
+省事，但会多引入 conda 依赖，而且 `llvmdev` 是用 zlib 动态库链的，
+编出来的 exe 需要 `zlib.dll` / `zstd.dll`（本项目的 CMakeLists 已经自动
+把它们复制到 exe 旁边了）。
+
+**③ MSYS2**
+
+```bash
+pacman -S mingw-w64-x86_64-llvm mingw-w64-x86_64-gcc flex bison
+```
+
+`mingw-w64-x86_64-llvm` 同样带完整的 `include/llvm/**` 和静态库，
+而且 flex / bison 一并就位。注意它编出来的是 **MinGW ABI**
+（目标三元组 `x86_64-w64-windows-gnu`），和 MSVC 那套不能混用。
+
+#### flex / bison
+
+Windows 上用 [winflexbison](https://github.com/lexxmark/winflexbison)
+（提供 `win_flex.exe` 和 `win_bison.exe`），或者直接用 MSYS2 / conda 里的。
 
 ### 1.2 构建
 
@@ -48,8 +91,12 @@ pwsh -File build.ps1
 然后调用 CMake。路径可以用参数覆盖：
 
 ```powershell
-pwsh -File build.ps1 -LlvmDir E:\Anaconda\envs\tinycompiler\Library `
-                       -FlexBisonDir E:\Tools\winflexbison
+# 用官方 tar.xz 解压出来的 LLVM
+pwsh -File build.ps1 -LlvmDir 'E:\LLVM-full\clang+llvm-22.1.8-x86_64-pc-windows-msvc'
+
+# 或者用 conda-forge 的 llvmdev
+pwsh -File build.ps1 -LlvmDir 'E:\Anaconda\envs\tinycompiler\Library' `
+                       -FlexBisonDir 'E:\Tools\winflexbison'
 ```
 
 Linux：
