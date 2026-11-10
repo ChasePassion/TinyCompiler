@@ -3,8 +3,22 @@
 #include <cstdio>
 #include <string>
 
+namespace {
+// 已经报出来的错误个数
+int g_errorCount = 0;
+} // namespace
+
 void LogError(const std::string& msg) {
     fprintf(stderr, "error: %s\n", msg.c_str());
+    ++g_errorCount;
+}
+
+int ErrorCount() {
+    return g_errorCount;
+}
+
+void ResetErrorCount() {
+    g_errorCount = 0;
 }
 
 std::string JsonEscape(const std::string& s) {    std::string out;

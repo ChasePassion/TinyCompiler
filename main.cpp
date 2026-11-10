@@ -9,6 +9,7 @@
 #include "ASTNodes.h"
 #include "CodeGen.h"
 #include "ObjGen.h"
+#include "utils.h"
 
 // 语法分析器建立的语法树根节点
 extern NBlock* programBlock;
@@ -97,6 +98,11 @@ int main(int argc, char** argv) {
     CodeGenContext context;
     context.generateCode(*programBlock);
 
+    if (ErrorCount() > 0) {
+        fprintf(stderr, "error: 编译过程中有 %d 处错误\n", ErrorCount());
+        return 1;
+    }
+
     if (emitIROnly) {
         std::error_code ec;
         llvm::raw_fd_ostream out(outputFile, ec, llvm::sys::fs::OF_None);
@@ -111,5 +117,5 @@ int main(int argc, char** argv) {
     }
 
     ObjGen(context, outputFile);
-    return 0;
+    return ErrorCount() > 0 ? 1 : 0;
 }

@@ -425,6 +425,35 @@ return createGEP(ctx, global->getValueType(), global, indices);
 引号和转义序列在**词法分析阶段**就处理掉（`UnescapeStringLiteral`），
 语法树里存的是真正的字符串内容。
 
+### 4.9 错误处理
+
+编译器里所有的失败路径都走同一个出口 `LogError()`，它会做两件事：
+
+1. 把错误信息打到 **stderr**（正常输出走 stdout，两者不会混在一起）
+2. 给错误计数加一
+
+编译结束时检查这个计数：
+
+```cpp
+if (ErrorCount() > 0) {
+    fprintf(stderr, "error: 编译过程中有 %d 处错误\n", ErrorCount());
+    return 1;
+}
+```
+
+所以**只要有错误，就不会生成目标文件，退出码也一定是非 0**。
+脚本可以直接靠退出码判断编译是否成功，不用去解析输出。
+
+```
+$ TinyCompiler -o out.obj bad.input
+error: 未定义的变量：undefinedVar
+$ echo $?
+1
+```
+
+这样做的好处是：代码生成里任何一步失败都只是「返回 nullptr + 记一个错」，
+不会像以前那样直接访问空指针把程序带崩。
+
 ---
 
 ## 5. 测试

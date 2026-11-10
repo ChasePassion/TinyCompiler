@@ -6,6 +6,11 @@
 // 统一的错误输出：写到 stderr，方便和正常输出区分开
 void LogError(const std::string& msg);
 
+// 已经报了多少个错。编译器在最后会检查这个计数：
+// 只要有错就不生成目标文件，并以非 0 的退出码结束。
+int ErrorCount();
+void ResetErrorCount();
+
 // JSON 字符串转义（AST 可视化用）
 std::string JsonEscape(const std::string& s);
 

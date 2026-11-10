@@ -20,10 +20,18 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/Triple.h>
 
+#include "utils.h"
+
 #include <memory>
 #include <optional>
 
 void ObjGen(CodeGenContext& context, const std::string& filename) {
+    // 前面已经报过错就别再生成目标文件了，免得产出一个半成品
+    if (ErrorCount() > 0) {
+        llvm::errs() << "error: 有 " << ErrorCount() << " 处错误，跳过目标代码生成\n";
+        return;
+    }
+
     // 只注册本机目标，这样链接时不用把所有后端都拖进来。
     // 注意：InitializeNativeTarget() 同时也会把 X86 的各个 pass 注册到
     // legacy PassRegistry 里，后面的代码生成要用到它们。
