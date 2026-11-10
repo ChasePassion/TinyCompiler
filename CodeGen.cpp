@@ -1,579 +1,730 @@
-//
-// Created by cs on 2017/5/28.
-//
-
-#include <llvm/IR/Value.h>
-#include <llvm/IR/LLVMContext.h>
-#include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/Module.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/IR/IRPrintingPasses.h>
-#include <llvm/Support/raw_ostream.h>
-//#include <llvm/IR/Verifier.h>
 #include "CodeGen.h"
+
 #include "ASTNodes.h"
 #include "TypeSystem.h"
-using legacy::PassManager;
-#define ISTYPE(value, id) (value->getType()->getTypeID() == id)
+#include "utils.h"
 
-/*
- * TODO:
- *       1. unary ops
- *       2. variable declaration list
- *
- *
- *
- */
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
 
-//
-static Type* TypeOf(const NIdentifier & type, CodeGenContext& context){        // get llvm::type of variable base on its identifier
-    return context.typeSystem.getVarType(type);
+using namespace llvm;
+
+// ---------------------------------------------------------------------------
+// 共用小工具
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// 统一的 GEP 封装。LLVM 22 起 GEP 必须显式给出元素类型（指针是不透明的，
+// 无法再从指针类型反推元素类型），所以这里统一收口，改版本时只改这一处。
+Value* createGEP(CodeGenContext& ctx, Type* elementType, Value* pointer,
+                 ArrayRef<Value*> indices) {
+    return ctx.builder.CreateInBoundsGEP(elementType, pointer, indices);
 }
 
-static Value* CastToBoolean(CodeGenContext& context, Value* condValue){
+// 常量 0（i32）
+Value* zero(CodeGenContext& ctx) {
+    return ConstantInt::get(Type::getInt32Ty(ctx.llvmContext), 0);
+}
 
-    if( ISTYPE(condValue, Type::IntegerTyID) ){
-        condValue = context.builder.CreateIntCast(condValue, Type::getInt1Ty(context.llvmContext), true);
-        return context.builder.CreateICmpNE(condValue, ConstantInt::get(Type::getInt1Ty(context.llvmContext), 0, true));
-    }else if( ISTYPE(condValue, Type::DoubleTyID) ){
-        return context.builder.CreateFCmpONE(condValue, ConstantFP::get(context.llvmContext, APFloat(0.0)));
-    }else{
-        return condValue;
+// 把值转成布尔：整数非 0 为真，浮点非 0 为真。
+// 注意不能把整数直接截断成 1 位，那样 2 会变成 0（假）。
+Value* toBoolean(CodeGenContext& ctx, Value* value) {
+    Type* type = value->getType();
+    if (type->isIntegerTy()) {
+        return ctx.builder.CreateICmpNE(value, ConstantInt::get(type, 0), "tobool");
+    }
+    if (type->isFloatingPointTy()) {
+        return ctx.builder.CreateFCmpONE(value, ConstantFP::get(type, 0.0), "tobool");
+    }
+    return value;
+}
+
+// 统一两个操作数的类型：
+//   1. 只要有一边是浮点，两边都提升到 double
+//   2. 两边都是整数时，统一到较宽的那个（至少 32 位）
+void unifyOperands(CodeGenContext& ctx, Value*& left, Value*& right) {
+    Type* leftType = left->getType();
+    Type* rightType = right->getType();
+
+    if (leftType->isFloatingPointTy() || rightType->isFloatingPointTy()) {
+        Type* doubleType = ctx.typeSystem.typeByName("double");
+        if (leftType != doubleType) {
+            left = ctx.typeSystem.cast(left, doubleType, ctx.builder);
+        }
+        if (rightType != doubleType) {
+            right = ctx.typeSystem.cast(right, doubleType, ctx.builder);
+        }
+        return;
+    }
+
+    if (leftType->isIntegerTy() && rightType->isIntegerTy()) {
+        unsigned width = std::max(leftType->getIntegerBitWidth(),
+                                  rightType->getIntegerBitWidth());
+        if (width < 32) {
+            width = 32;
+        }
+        Type* target = Type::getIntNTy(ctx.llvmContext, width);
+        if (leftType != target) {
+            left = ctx.typeSystem.cast(left, target, ctx.builder);
+        }
+        if (rightType != target) {
+            right = ctx.typeSystem.cast(right, target, ctx.builder);
+        }
     }
 }
 
-static llvm::Value* calcArrayIndex(shared_ptr<NArrayIndex> index, CodeGenContext &context){
-    auto sizeVec = context.getArraySize(index->arrayName->name);
-    cout << "sizeVec:" << sizeVec.size() << ", expressions: " << index->expressions->size() << endl;
-    assert(sizeVec.size() > 0 && sizeVec.size() == index->expressions->size());
-    auto expression = *(index->expressions->rbegin());
+// 多维数组展平成一维后的下标：((e0 * d1) + e1) * d2 + e2 ...
+Value* flatIndex(CodeGenContext& ctx, const Symbol& symbol,
+                 const std::vector<std::shared_ptr<NExpression>>& exprs) {
+    if (exprs.size() != symbol.dims.size()) {
+        LogError("数组下标的个数和数组维度对不上");
+        return nullptr;
+    }
+    Type* intType = ctx.typeSystem.typeByName("int");
+    Value* result = nullptr;
+    for (size_t i = 0; i < exprs.size(); ++i) {
+        Value* element = exprs[i]->codeGen(ctx);
+        if (!element) {
+            return nullptr;
+        }
+        element = ctx.typeSystem.cast(element, intType, ctx.builder);
+        if (!result) {
+            result = element;
+            continue;
+        }
+        Value* stride = ConstantInt::get(intType, symbol.dims[i]);
+        result = ctx.builder.CreateAdd(ctx.builder.CreateMul(result, stride, "mul"), element, "idx");
+    }
+    return result;
+}
 
-    for(unsigned int i=sizeVec.size()-1; i>=1; i--){
-        auto temp = make_shared<NBinaryOperator>(make_shared<NInteger>(sizeVec[i]), TMUL, index->expressions->at(i-1));
-//        cout << "2" << endl;
-        expression = make_shared<NBinaryOperator>(temp, TPLUS, expression);
-//        cout << "3" << endl;
+} // namespace
+
+// ---------------------------------------------------------------------------
+// CodeGenContext
+// ---------------------------------------------------------------------------
+
+CodeGenContext::CodeGenContext()
+    : builder(llvmContext), typeSystem(llvmContext) {
+    theModule = std::make_unique<llvm::Module>("main", llvmContext);
+}
+
+void CodeGenContext::pushScope() {
+    scopes_.emplace_back();
+}
+
+void CodeGenContext::popScope() {
+    if (!scopes_.empty()) {
+        scopes_.pop_back();
+    }
+}
+
+Symbol* CodeGenContext::findSymbol(const std::string& name) {
+    // 从最内层作用域往外找，符合 C 的遮蔽规则
+    for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+        auto it = scope->symbols.find(name);
+        if (it != scope->symbols.end()) {
+            return &it->second;
+        }
+    }
+    return nullptr;
+}
+
+void CodeGenContext::defineSymbol(const std::string& name, const Symbol& symbol) {
+    if (scopes_.empty()) {
+        scopes_.emplace_back();
+    }
+    scopes_.back().symbols[name] = symbol;
+}
+
+void CodeGenContext::setReturnValue(Value* value) {
+    returnValue_ = value;
+}
+
+Value* CodeGenContext::returnValue() {
+    return returnValue_;
+}
+
+void CodeGenContext::setFunctionReturnType(Type* type) {
+    functionReturnType_ = type;
+}
+
+Type* CodeGenContext::currentFunctionReturnType() {
+    return functionReturnType_;
+}
+
+Function* CodeGenContext::declareFunction(const NFunctionDeclaration& declaration) {
+    std::vector<llvm::Type*> paramTypes;
+    for (auto& param : declaration.params) {
+        llvm::Type* type = typeSystem.llvmType(*param->type);
+        if (!type) {
+            LogError("未知的参数类型：" + param->type->name);
+            return nullptr;
+        }
+        paramTypes.push_back(type);
     }
 
-    return expression->codeGen(context);
+    llvm::Type* returnType = typeSystem.llvmType(*declaration.type);
+    if (!returnType) {
+        LogError("未知的返回类型：" + declaration.type->name);
+        return nullptr;
+    }
+
+    // 外部函数按可变参数处理，这样 printf("%d", x) 这种调用才能正常工作。
+    llvm::FunctionType* functionType =
+        llvm::FunctionType::get(returnType, paramTypes, declaration.isExtern);
+
+    // 已经声明过的函数直接复用，避免同一个名字被定义两次
+    llvm::Function* existing = theModule->getFunction(declaration.id->name);
+    if (existing) {
+        return existing;
+    }
+    return llvm::Function::Create(functionType, llvm::GlobalValue::ExternalLinkage,
+                                  declaration.id->name, theModule.get());
 }
 
 void CodeGenContext::generateCode(NBlock& root) {
-    cout << "Generating IR code" << endl;
+    // 顶层只有函数和结构体声明。为了让代码生成有合法的插入点，这里建一个
+    // 临时函数；它不属于 Module，最后会被删掉，不会出现在目标文件里。
+    llvm::FunctionType* dummyType =
+        llvm::FunctionType::get(llvm::Type::getVoidTy(llvmContext), false);
+    llvm::Function* dummy = llvm::Function::Create(
+        dummyType, llvm::GlobalValue::InternalLinkage, "tiny.global", theModule.get());
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(llvmContext, "entry", dummy);
 
-    std::vector<Type*> sysArgs;
-    FunctionType* mainFuncType = FunctionType::get(Type::getVoidTy(this->llvmContext), makeArrayRef(sysArgs), false);
-    Function* mainFunc = Function::Create(mainFuncType, GlobalValue::ExternalLinkage, "main");
-    BasicBlock* block = BasicBlock::Create(this->llvmContext, "entry");
+    builder.SetInsertPoint(entry);
+    pushScope();
 
-    pushBlock(block);
-    Value* retValue = root.codeGen(*this);
-    popBlock();
-
-    cout << "Code generate success" << endl;
-
-    PassManager passManager;
-    passManager.add(createPrintModulePass(outs()));
-    passManager.run(*(this->theModule.get()));
-    return;
-}
-
-llvm::Value* NAssignment::codeGen(CodeGenContext &context) {
-    cout << "Generating assignment of " << this->lhs->name << " = " << endl;
-    Value* dst = context.getSymbolValue(this->lhs->name);
-    auto dstType = context.getSymbolType(this->lhs->name);
-    string dstTypeStr = dstType->name;
-    if( !dst ){
-        return LogErrorV("Undeclared variable");
-    }
-    Value* exp = exp = this->rhs->codeGen(context);
-
-    cout << "dst typeid = " << TypeSystem::llvmTypeToStr(context.typeSystem.getVarType(dstTypeStr)) << endl;
-    cout << "exp typeid = " << TypeSystem::llvmTypeToStr(exp) << endl;
-
-    exp = context.typeSystem.cast(exp, context.typeSystem.getVarType(dstTypeStr), context.currentBlock());
-    context.builder.CreateStore(exp, dst);
-    return dst;
-}
-
-llvm::Value* NBinaryOperator::codeGen(CodeGenContext &context) {
-    cout << "Generating binary operator" << endl;
-
-    Value* L = this->lhs->codeGen(context);
-    Value* R = this->rhs->codeGen(context);
-    bool fp = false;
-
-    if( (L->getType()->getTypeID() == Type::DoubleTyID) || (R->getType()->getTypeID() == Type::DoubleTyID) ){  // type upgrade
-        fp = true;
-        if( (R->getType()->getTypeID() != Type::DoubleTyID) ){
-            R = context.builder.CreateUIToFP(R, Type::getDoubleTy(context.llvmContext), "ftmp");
-        }
-        if( (L->getType()->getTypeID() != Type::DoubleTyID) ){
-            L = context.builder.CreateUIToFP(L, Type::getDoubleTy(context.llvmContext), "ftmp");
+    // 第一遍：先把所有函数原型建好，这样调用后面才定义的函数也能找到。
+    // 结构体类型也要在这一遍注册，否则形参里用到结构体时会找不到类型。
+    for (auto& statement : root.statements) {
+        if (auto* structure = dynamic_cast<NStructDeclaration*>(statement.get())) {
+            structure->codeGen(*this);
+        } else if (auto* function = dynamic_cast<NFunctionDeclaration*>(statement.get())) {
+            declareFunction(*function);
         }
     }
 
-    if( !L || !R ){
+    // 第二遍：真正生成代码
+    root.codeGen(*this);
+
+    popScope();
+
+    builder.ClearInsertionPoint();
+    dummy->eraseFromParent();
+}
+
+// ---------------------------------------------------------------------------
+// 字面量与标识符
+// ---------------------------------------------------------------------------
+
+llvm::Value* NInteger::codeGen(CodeGenContext& ctx) {
+    // getSigned：负数要按有符号解释，不能当成无符号的大数
+    return llvm::ConstantInt::getSigned(llvm::Type::getInt32Ty(ctx.llvmContext), this->value);
+}
+
+llvm::Value* NDouble::codeGen(CodeGenContext& ctx) {
+    return llvm::ConstantFP::get(llvm::Type::getDoubleTy(ctx.llvmContext), this->value);
+}
+
+llvm::Value* NLiteral::codeGen(CodeGenContext& ctx) {
+    // 全局字符串的类型是 [N x i8]，要取首元素的指针才能当 char* 用
+    llvm::GlobalVariable* global = ctx.builder.CreateGlobalString(this->value, "str");
+    std::vector<llvm::Value*> indices{zero(ctx), zero(ctx)};
+    return createGEP(ctx, global->getValueType(), global, indices);
+}
+
+llvm::Value* NIdentifier::codeGen(CodeGenContext& ctx) {
+    Symbol* symbol = ctx.findSymbol(this->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->name);
+    }
+    // 数组在表达式里退化成指向首元素的指针
+    if (!symbol->dims.empty()) {
+        return symbol->arrayBase;
+    }
+    return ctx.builder.CreateLoad(symbol->type, symbol->addr, this->name.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// 表达式
+// ---------------------------------------------------------------------------
+
+llvm::Value* NBinaryOperator::codeGen(CodeGenContext& ctx) {
+    llvm::Value* left = this->lhs->codeGen(ctx);
+    llvm::Value* right = this->rhs->codeGen(ctx);
+    if (!left || !right) {
         return nullptr;
     }
-    cout << "fp = " << ( fp ? "true" : "false" ) << endl;
-    cout << "L is " << TypeSystem::llvmTypeToStr(L) << endl;
-    cout << "R is " << TypeSystem::llvmTypeToStr(R) << endl;
 
-    switch (this->op){
-        case TPLUS:
-            return fp ? context.builder.CreateFAdd(L, R, "addftmp") : context.builder.CreateAdd(L, R, "addtmp");
-        case TMINUS:
-            return fp ? context.builder.CreateFSub(L, R, "subftmp") : context.builder.CreateSub(L, R, "subtmp");
-        case TMUL:
-            return fp ? context.builder.CreateFMul(L, R, "mulftmp") : context.builder.CreateMul(L, R, "multmp");
-        case TDIV:
-            return fp ? context.builder.CreateFDiv(L, R, "divftmp") : context.builder.CreateSDiv(L, R, "divtmp");
-        case TAND:
-            return fp ? LogErrorV("Double type has no AND operation") : context.builder.CreateAnd(L, R, "andtmp");
-        case TOR:
-            return fp ? LogErrorV("Double type has no OR operation") : context.builder.CreateOr(L, R, "ortmp");
-        case TXOR:
-            return fp ? LogErrorV("Double type has no XOR operation") : context.builder.CreateXor(L, R, "xortmp");
-        case TSHIFTL:
-            return fp ? LogErrorV("Double type has no LEFT SHIFT operation") : context.builder.CreateShl(L, R, "shltmp");
-        case TSHIFTR:
-            return fp ? LogErrorV("Double type has no RIGHT SHIFT operation") : context.builder.CreateAShr(L, R, "ashrtmp");
+    unifyOperands(ctx, left, right);
+    bool isFloat = left->getType()->isFloatingPointTy();
 
-        case TCLT:
-            return fp ? context.builder.CreateFCmpULT(L, R, "cmpftmp") : context.builder.CreateICmpULT(L, R, "cmptmp");
-        case TCLE:
-            return fp ? context.builder.CreateFCmpOLE(L, R, "cmpftmp") : context.builder.CreateICmpSLE(L, R, "cmptmp");
-        case TCGE:
-            return fp ? context.builder.CreateFCmpOGE(L, R, "cmpftmp") : context.builder.CreateICmpSGE(L, R, "cmptmp");
-        case TCGT:
-            return fp ? context.builder.CreateFCmpOGT(L, R, "cmpftmp") : context.builder.CreateICmpSGT(L, R, "cmptmp");
-        case TCEQ:
-            return fp ? context.builder.CreateFCmpOEQ(L, R, "cmpftmp") : context.builder.CreateICmpEQ(L, R, "cmptmp");
-        case TCNE:
-            return fp ? context.builder.CreateFCmpONE(L, R, "cmpftmp") : context.builder.CreateICmpNE(L, R, "cmptmp");
-        default:
-            return LogErrorV("Unknown binary operator");
+    switch (this->op) {
+    case OP_ADD: return isFloat ? ctx.builder.CreateFAdd(left, right, "add")
+                                : ctx.builder.CreateAdd(left, right, "add");
+    case OP_SUB: return isFloat ? ctx.builder.CreateFSub(left, right, "sub")
+                                : ctx.builder.CreateSub(left, right, "sub");
+    case OP_MUL: return isFloat ? ctx.builder.CreateFMul(left, right, "mul")
+                                : ctx.builder.CreateMul(left, right, "mul");
+    case OP_DIV: return isFloat ? ctx.builder.CreateFDiv(left, right, "div")
+                                : ctx.builder.CreateSDiv(left, right, "div");
+    case OP_MOD:
+        if (isFloat) return LogErrorV("浮点数不支持取模运算");
+        return ctx.builder.CreateSRem(left, right, "mod");
+    case OP_AND:
+        if (isFloat) return LogErrorV("浮点数不支持按位与运算");
+        return ctx.builder.CreateAnd(left, right, "and");
+    case OP_OR:
+        if (isFloat) return LogErrorV("浮点数不支持按位或运算");
+        return ctx.builder.CreateOr(left, right, "or");
+    case OP_XOR:
+        if (isFloat) return LogErrorV("浮点数不支持按位异或运算");
+        return ctx.builder.CreateXor(left, right, "xor");
+    case OP_SHL:
+        if (isFloat) return LogErrorV("浮点数不支持移位运算");
+        return ctx.builder.CreateShl(left, right, "shl");
+    case OP_SHR:
+        if (isFloat) return LogErrorV("浮点数不支持移位运算");
+        return ctx.builder.CreateAShr(left, right, "shr");
+    // 本语言的整数是有符号的，比较运算统一用有符号版本
+    case OP_LT: return isFloat ? ctx.builder.CreateFCmpOLT(left, right, "cmp")
+                               : ctx.builder.CreateICmpSLT(left, right, "cmp");
+    case OP_LE: return isFloat ? ctx.builder.CreateFCmpOLE(left, right, "cmp")
+                               : ctx.builder.CreateICmpSLE(left, right, "cmp");
+    case OP_GT: return isFloat ? ctx.builder.CreateFCmpOGT(left, right, "cmp")
+                               : ctx.builder.CreateICmpSGT(left, right, "cmp");
+    case OP_GE: return isFloat ? ctx.builder.CreateFCmpOGE(left, right, "cmp")
+                               : ctx.builder.CreateICmpSGE(left, right, "cmp");
+    case OP_EQ: return isFloat ? ctx.builder.CreateFCmpOEQ(left, right, "cmp")
+                               : ctx.builder.CreateICmpEQ(left, right, "cmp");
+    case OP_NE: return isFloat ? ctx.builder.CreateFCmpONE(left, right, "cmp")
+                               : ctx.builder.CreateICmpNE(left, right, "cmp");
     }
+    return LogErrorV("未知的二元运算符");
 }
 
-llvm::Value* NBlock::codeGen(CodeGenContext &context) {
-    cout << "Generating block" << endl;
-    Value* last = nullptr;
-    for(auto it=this->statements->begin(); it!=this->statements->end(); it++){
-        last = (*it)->codeGen(context);
+llvm::Value* NAssignment::codeGen(CodeGenContext& ctx) {
+    Symbol* symbol = ctx.findSymbol(this->lhs->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->lhs->name);
+    }
+    llvm::Value* value = this->rhs->codeGen(ctx);
+    if (!value) {
+        return nullptr;
+    }
+    value = ctx.typeSystem.cast(value, symbol->type, ctx.builder);
+    ctx.builder.CreateStore(value, symbol->addr);
+    return value;
+}
+
+llvm::Value* NMethodCall::codeGen(CodeGenContext& ctx) {
+    llvm::Function* callee = ctx.theModule->getFunction(this->id->name);
+    if (!callee) {
+        return LogErrorV("找不到函数：" + this->id->name);
+    }
+    if (this->args.size() < callee->arg_size()) {
+        return LogErrorV("函数 " + this->id->name + " 需要的参数比给出的多");
+    }
+
+    std::vector<llvm::Value*> argv;
+    for (size_t i = 0; i < this->args.size(); ++i) {
+        llvm::Value* value = this->args[i]->codeGen(ctx);
+        if (!value) {
+            return nullptr;
+        }
+        // 固定参数按形参类型做隐式转换；可变参数不做限制
+        if (i < callee->arg_size()) {
+            value = ctx.typeSystem.cast(value, callee->getArg(i)->getType(), ctx.builder);
+        }
+        argv.push_back(value);
+    }
+    return ctx.builder.CreateCall(callee, argv, "call");
+}
+
+llvm::Value* NStructMember::codeGen(CodeGenContext& ctx) {
+    Symbol* symbol = ctx.findSymbol(this->id->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->id->name);
+    }
+    if (!symbol->type || !symbol->type->isStructTy()) {
+        return LogErrorV(this->id->name + " 不是结构体");
+    }
+    std::string structName = symbol->type->getStructName().str();
+    long memberIndex = ctx.typeSystem.getStructMemberIndex(structName, this->member->name);
+    if (memberIndex < 0) {
+        return LogErrorV("结构体 " + structName + " 里没有成员 " + this->member->name);
+    }
+    std::vector<llvm::Value*> indices{zero(ctx), ConstantInt::get(ctx.typeSystem.typeByName("int"), memberIndex)};
+    llvm::Value* memberPtr = createGEP(ctx, symbol->type, symbol->addr, indices);
+    llvm::Type* memberType = ctx.typeSystem.structMemberType(structName, this->member->name);
+    if (!memberType) {
+        return LogErrorV("结构体 " + structName + " 里没有成员 " + this->member->name);
+    }
+    return ctx.builder.CreateLoad(memberType, memberPtr, this->member->name.c_str());
+}
+
+llvm::Value* NArrayIndex::codeGen(CodeGenContext& ctx) {
+    Symbol* symbol = ctx.findSymbol(this->arrayName->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->arrayName->name);
+    }
+    if (symbol->dims.empty()) {
+        return LogErrorV(this->arrayName->name + " 不是数组");
+    }
+    llvm::Value* index = flatIndex(ctx, *symbol, this->exprs);
+    if (!index) {
+        return nullptr;
+    }
+    llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+    return ctx.builder.CreateLoad(symbol->type, elementPtr, "elem");
+}
+
+llvm::Value* NArrayAssignment::codeGen(CodeGenContext& ctx) {
+    Symbol* symbol = ctx.findSymbol(this->index->arrayName->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->index->arrayName->name);
+    }
+    if (symbol->dims.empty()) {
+        return LogErrorV(this->index->arrayName->name + " 不是数组");
+    }
+    llvm::Value* value = this->expression->codeGen(ctx);
+    if (!value) {
+        return nullptr;
+    }
+    value = ctx.typeSystem.cast(value, symbol->type, ctx.builder);
+    llvm::Value* index = flatIndex(ctx, *symbol, this->index->exprs);
+    if (!index) {
+        return nullptr;
+    }
+    llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+    ctx.builder.CreateStore(value, elementPtr);
+    return value;
+}
+
+llvm::Value* NStructAssignment::codeGen(CodeGenContext& ctx) {
+    Symbol* symbol = ctx.findSymbol(this->member->id->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->member->id->name);
+    }
+    if (!symbol->type || !symbol->type->isStructTy()) {
+        return LogErrorV(this->member->id->name + " 不是结构体");
+    }
+    std::string structName = symbol->type->getStructName().str();
+    long memberIndex = ctx.typeSystem.getStructMemberIndex(structName, this->member->member->name);
+    if (memberIndex < 0) {
+        return LogErrorV("结构体 " + structName + " 里没有成员 " + this->member->member->name);
+    }
+    llvm::Type* memberType = ctx.typeSystem.structMemberType(structName, this->member->member->name);
+
+    llvm::Value* value = this->expression->codeGen(ctx);
+    if (!value) {
+        return nullptr;
+    }
+    if (memberType) {
+        value = ctx.typeSystem.cast(value, memberType, ctx.builder);
+    }
+    std::vector<llvm::Value*> indices{zero(ctx), ConstantInt::get(ctx.typeSystem.typeByName("int"), memberIndex)};
+    llvm::Value* memberPtr = createGEP(ctx, symbol->type, symbol->addr, indices);
+    ctx.builder.CreateStore(value, memberPtr);
+    return value;
+}
+
+// ---------------------------------------------------------------------------
+// 语句
+// ---------------------------------------------------------------------------
+
+llvm::Value* NBlock::codeGen(CodeGenContext& ctx) {
+    llvm::Value* last = nullptr;
+    for (auto& statement : this->statements) {
+        last = statement->codeGen(ctx);
     }
     return last;
 }
 
-llvm::Value* NInteger::codeGen(CodeGenContext &context) {
-    cout << "Generating Integer: " << this->value << endl;
-    return ConstantInt::get(Type::getInt32Ty(context.llvmContext), this->value, true);
-//    return ConstantInt::get(context.llvmContext, APInt(INTBITS, this->value, true));
+llvm::Value* NExpressionStatement::codeGen(CodeGenContext& ctx) {
+    return this->expression->codeGen(ctx);
 }
 
-llvm::Value* NDouble::codeGen(CodeGenContext &context) {
-    cout << "Generating Double: " << this->value << endl;
-    return ConstantFP::get(Type::getDoubleTy(context.llvmContext), this->value);
-//    return ConstantFP::get(context.llvmContext, APFloat(this->value));
-}
+llvm::Value* NVariableDeclaration::codeGen(CodeGenContext& ctx) {
+    Symbol symbol;
+    symbol.typeName = this->type->name;
+    symbol.dims = this->type->dims;
 
-llvm::Value* NIdentifier::codeGen(CodeGenContext &context) {
-    cout << "Generating identifier " << this->name << endl;
-    Value* value = context.getSymbolValue(this->name);
-    if( !value ){
-        return LogErrorV("Unknown variable name " + this->name);
-    }
-    if( value->getType()->isPointerTy() ){
-        auto arrayPtr = context.builder.CreateLoad(value, "arrayPtr");
-        if( arrayPtr->getType()->isArrayTy() ){
-            cout << "(Array Type)" << endl;
-//            arrayPtr->setAlignment(16);
-            std::vector<Value*> indices;
-            indices.push_back(ConstantInt::get(context.typeSystem.intTy, 0, false));
-            auto ptr = context.builder.CreateInBoundsGEP(value, indices, "arrayPtr");
-            return ptr;
+    if (this->type->isArray()) {
+        llvm::Type* elementType = ctx.typeSystem.typeByName(this->type->name);
+        if (!elementType) {
+            return LogErrorV("未知的类型：" + this->type->name);
         }
-    }
-    return context.builder.CreateLoad(value, false, "");
-
-}
-
-llvm::Value* NExpressionStatement::codeGen(CodeGenContext &context) {
-    return this->expression->codeGen(context);
-}
-
-llvm::Value* NFunctionDeclaration::codeGen(CodeGenContext &context) {
-    cout << "Generating function declaration of " << this->id->name << endl;
-    std::vector<Type*> argTypes;
-
-    for(auto &arg: *this->arguments){
-        if( arg->type->isArray ){
-            argTypes.push_back(PointerType::get(context.typeSystem.getVarType(arg->type->name), 0));
-        } else{
-            argTypes.push_back(TypeOf(*arg->type, context));
+        llvm::Type* storageType = ctx.typeSystem.arrayStorageType(*this->type);
+        llvm::Value* slot = ctx.builder.CreateAlloca(storageType, nullptr, this->id->name.c_str());
+        symbol.type = elementType;
+        symbol.addr = slot;
+        // 指向首元素的指针，等价于 C 里数组退化成的指针
+        symbol.arrayBase = createGEP(ctx, storageType, slot, {zero(ctx), zero(ctx)});
+    } else {
+        llvm::Type* type = ctx.typeSystem.llvmType(*this->type);
+        if (!type) {
+            return LogErrorV("未知的类型：" + this->type->name);
         }
+        symbol.type = type;
+        symbol.addr = ctx.builder.CreateAlloca(type, nullptr, this->id->name.c_str());
     }
-    Type* retType = nullptr;
-    if( this->type->isArray )
-        retType = PointerType::get(context.typeSystem.getVarType(this->type->name), 0);
-    else
-        retType = TypeOf(*this->type, context);
+    ctx.defineSymbol(this->id->name, symbol);
 
-    FunctionType* functionType = FunctionType::get(retType, argTypes, false);
-    Function* function = Function::Create(functionType, GlobalValue::ExternalLinkage, this->id->name.c_str(), context.theModule.get());
-
-    if( !this->isExternal ){
-        BasicBlock* basicBlock = BasicBlock::Create(context.llvmContext, "entry", function, nullptr);
-
-        context.builder.SetInsertPoint(basicBlock);
-        context.pushBlock(basicBlock);
-
-        // declare function params
-        auto origin_arg = this->arguments->begin();
-
-        for(auto &ir_arg_it: function->args()){
-            ir_arg_it.setName((*origin_arg)->id->name);
-            Value* argAlloc;
-            if( (*origin_arg)->type->isArray )
-                argAlloc = context.builder.CreateAlloca(PointerType::get(context.typeSystem.getVarType((*origin_arg)->type->name), 0));
-            else
-                argAlloc = (*origin_arg)->codeGen(context);
-
-            context.builder.CreateStore(&ir_arg_it, argAlloc, false);
-            context.setSymbolValue((*origin_arg)->id->name, argAlloc);
-            context.setSymbolType((*origin_arg)->id->name, (*origin_arg)->type);
-            context.setFuncArg((*origin_arg)->id->name, true);
-            origin_arg++;
+    if (this->init) {
+        llvm::Value* value = this->init->codeGen(ctx);
+        if (!value) {
+            return nullptr;
         }
-
-        this->block->codeGen(context);
-        if( context.getCurrentReturnValue() ){
-            context.builder.CreateRet(context.getCurrentReturnValue());
-        } else{
-            return LogErrorV("Function block return value not founded");
-        }
-        context.popBlock();
-
+        value = ctx.typeSystem.cast(value, symbol.type, ctx.builder);
+        ctx.builder.CreateStore(value, symbol.addr);
     }
-
-
-    return function;
+    return symbol.addr;
 }
 
-
-llvm::Value* NStructDeclaration::codeGen(CodeGenContext& context) {
-    cout << "Generating struct declaration of " << this->name->name << endl;
-
-    std::vector<Type*> memberTypes;
-
-//    context.builder.createstr
-    auto structType = StructType::create(context.llvmContext, this->name->name);
-    context.typeSystem.addStructType(this->name->name, structType);
-
-    for(auto& member: *this->members){
-        context.typeSystem.addStructMember(this->name->name, member->type->name, member->id->name);
-        memberTypes.push_back(TypeOf(*member->type, context));
-    }
-
-    structType->setBody(memberTypes);
-
-    return nullptr;
-}
-
-llvm::Value* NMethodCall::codeGen(CodeGenContext &context) {
-    cout << "Generating method call of " << this->id->name << endl;
-    Function * calleeF = context.theModule->getFunction(this->id->name);
-    if( !calleeF ){
-        LogErrorV("Function name not found");
-    }
-    if( calleeF->arg_size() != this->arguments->size() ){
-        LogErrorV("Function arguments size not match, calleeF=" + std::to_string(calleeF->size()) + ", this->arguments=" + std::to_string(this->arguments->size()) );
-    }
-    std::vector<Value*> argsv;
-    for(auto it=this->arguments->begin(); it!=this->arguments->end(); it++){
-        argsv.push_back((*it)->codeGen(context));
-        if( !argsv.back() ){        // if any argument codegen fail
+llvm::Value* NFunctionDeclaration::codeGen(CodeGenContext& ctx) {
+    llvm::Function* function = ctx.theModule->getFunction(this->id->name);
+    if (!function) {
+        function = ctx.declareFunction(*this);
+        if (!function) {
             return nullptr;
         }
     }
-    return context.builder.CreateCall(calleeF, argsv, "calltmp");
-}
+    if (this->isExtern) {
+        return function;
+    }
 
-llvm::Value* NVariableDeclaration::codeGen(CodeGenContext &context) {
-    cout << "Generating variable declaration of " << this->type->name << " " << this->id->name << endl;
-    Type* type = TypeOf(*this->type, context);
-    Value* initial = nullptr;
+    // 记住当前的插入位置，函数体生成完再恢复
+    llvm::BasicBlock* previousBlock = ctx.builder.GetInsertBlock();
+    llvm::BasicBlock::iterator previousPoint = ctx.builder.GetInsertPoint();
 
-    Value* inst = nullptr;
+    ctx.setReturnValue(nullptr);
+    ctx.setFunctionReturnType(function->getReturnType());
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.llvmContext, "entry", function);
+    ctx.builder.SetInsertPoint(entry);
+    ctx.pushScope();
 
-    if( this->type->isArray ){
-        uint64_t arraySize = 1;
-        std::vector<uint64_t> arraySizes;
-        for(auto it=this->type->arraySize->begin(); it!=this->type->arraySize->end(); it++){
-            NInteger* integer = dynamic_cast<NInteger*>(it->get());
-            arraySize *= integer->value;
-            arraySizes.push_back(integer->value);
+    // 把形参绑定到局部变量
+    unsigned index = 0;
+    for (auto& param : this->params) {
+        if (index >= function->arg_size()) {
+            break;
         }
+        llvm::Argument* argument = function->getArg(index++);
+        argument->setName(param->id->name);
 
-        context.setArraySize(this->id->name, arraySizes);
-        Value* arraySizeValue = NInteger(arraySize).codeGen(context);
-        auto arrayType = ArrayType::get(context.typeSystem.getVarType(this->type->name), arraySize);
-        inst = context.builder.CreateAlloca(arrayType, arraySizeValue, "arraytmp");
-    }else{
-        inst = context.builder.CreateAlloca(type);
+        Symbol symbol;
+        symbol.typeName = param->type->name;
+        symbol.dims = param->type->dims;
+
+        if (param->type->isArray()) {
+            // 数组形参退化成指针，直接用传进来的指针
+            symbol.type = ctx.typeSystem.typeByName(param->type->name);
+            symbol.arrayBase = argument;
+        } else {
+            llvm::Type* type = ctx.typeSystem.llvmType(*param->type);
+            if (!type) {
+                LogError("未知的参数类型：" + param->type->name);
+                break;
+            }
+            symbol.type = type;
+            symbol.addr = ctx.builder.CreateAlloca(type, nullptr, param->id->name.c_str());
+            ctx.builder.CreateStore(argument, symbol.addr);
+        }
+        ctx.defineSymbol(param->id->name, symbol);
     }
 
-    context.setSymbolType(this->id->name, this->type);
-    context.setSymbolValue(this->id->name, inst);
-
-    context.PrintSymTable();
-
-    if( this->assignmentExpr != nullptr ){
-        NAssignment assignment(this->id, this->assignmentExpr);
-        assignment.codeGen(context);
+    if (this->body) {
+        this->body->codeGen(ctx);
     }
-    return inst;
+    ctx.popScope();
+
+    // 函数体最后如果还没有 ret，补一个
+    llvm::BasicBlock* current = ctx.builder.GetInsertBlock();
+    if (current && !current->getTerminator()) {
+        llvm::Value* value = ctx.returnValue();
+        if (!value) {
+            value = ctx.typeSystem.defaultValue(function->getReturnType());
+        }
+        if (value) {
+            ctx.builder.CreateRet(value);
+        }
+    }
+
+    // 恢复插入位置
+    if (previousBlock) {
+        ctx.builder.SetInsertPoint(previousBlock, previousPoint);
+    }
+    return function;
 }
 
-llvm::Value* NReturnStatement::codeGen(CodeGenContext &context) {
-    cout << "Generating return statement" << endl;
-    Value* returnValue = this->expression->codeGen(context);
-    context.setCurrentReturnValue(returnValue);
-    return returnValue;
-}
-
-llvm::Value* NIfStatement::codeGen(CodeGenContext &context) {
-    cout << "Generating if statement" << endl;
-    Value* condValue = this->condition->codeGen(context);
-    if( !condValue )
+llvm::Value* NStructDeclaration::codeGen(CodeGenContext& ctx) {
+    // 声明阶段已经注册过就不用重复注册了
+    if (ctx.typeSystem.isStruct(this->name->name)) {
         return nullptr;
-
-    condValue = CastToBoolean(context, condValue);
-
-    Function* theFunction = context.builder.GetInsertBlock()->getParent();      // the function where if statement is in
-
-    BasicBlock *thenBB = BasicBlock::Create(context.llvmContext, "then", theFunction);
-    BasicBlock *falseBB = BasicBlock::Create(context.llvmContext, "else");
-    BasicBlock *mergeBB = BasicBlock::Create(context.llvmContext, "ifcont");
-
-    if( this->falseBlock ){
-        context.builder.CreateCondBr(condValue, thenBB, falseBB);
-    } else{
-        context.builder.CreateCondBr(condValue, thenBB, mergeBB);
     }
 
-    context.builder.SetInsertPoint(thenBB);
-
-    context.pushBlock(thenBB);
-
-    this->trueBlock->codeGen(context);
-
-    context.popBlock();
-
-    thenBB = context.builder.GetInsertBlock();
-
-    if( thenBB->getTerminator() == nullptr ){       //
-        context.builder.CreateBr(mergeBB);
+    std::vector<llvm::Type*> memberTypes;
+    for (auto& member : this->members) {
+        llvm::Type* type = ctx.typeSystem.typeByName(member->type->name);
+        if (!type) {
+            return LogErrorV("未知的成员类型：" + member->type->name);
+        }
+        memberTypes.push_back(type);
     }
 
-    if( this->falseBlock ){
-        theFunction->getBasicBlockList().push_back(falseBB);    //
-        context.builder.SetInsertPoint(falseBB);            //
-
-        context.pushBlock(thenBB);
-
-        this->falseBlock->codeGen(context);
-
-        context.popBlock();
-
-        context.builder.CreateBr(mergeBB);
+    llvm::StructType* structType = llvm::StructType::create(ctx.llvmContext, this->name->name);
+    ctx.typeSystem.addStructType(this->name->name, structType);
+    for (auto& member : this->members) {
+        ctx.typeSystem.addStructMember(this->name->name, member->type->name, member->id->name);
     }
-
-    theFunction->getBasicBlockList().push_back(mergeBB);        //
-    context.builder.SetInsertPoint(mergeBB);        //
-
+    structType->setBody(memberTypes);
     return nullptr;
 }
 
-llvm::Value* NForStatement::codeGen(CodeGenContext &context) {
-
-    Function* theFunction = context.builder.GetInsertBlock()->getParent();
-
-    BasicBlock *block = BasicBlock::Create(context.llvmContext, "forloop", theFunction);
-    BasicBlock *after = BasicBlock::Create(context.llvmContext, "forcont");
-
-    // execute the initial
-    if( this->initial )
-        this->initial->codeGen(context);
-
-    Value* condValue = this->condition->codeGen(context);
-    if( !condValue )
+llvm::Value* NReturnStatement::codeGen(CodeGenContext& ctx) {
+    llvm::Value* value = this->expression->codeGen(ctx);
+    if (!value) {
         return nullptr;
-
-    condValue = CastToBoolean(context, condValue);
-
-    // fall to the block
-    context.builder.CreateCondBr(condValue, block, after);
-
-    context.builder.SetInsertPoint(block);
-
-    context.pushBlock(block);
-
-    this->block->codeGen(context);
-
-    context.popBlock();
-
-    // do increment
-    if( this->increment ){
-        this->increment->codeGen(context);
     }
-
-    // execute the again or stop
-    condValue = this->condition->codeGen(context);
-    condValue = CastToBoolean(context, condValue);
-    context.builder.CreateCondBr(condValue, block, after);
-
-    // insert the after block
-    theFunction->getBasicBlockList().push_back(after);
-    context.builder.SetInsertPoint(after);
-
-    return nullptr;
+    // 返回值要转换成函数声明的返回类型
+    llvm::Type* expected = ctx.currentFunctionReturnType();
+    if (expected && !expected->isVoidTy()) {
+        value = ctx.typeSystem.cast(value, expected, ctx.builder);
+    }
+    ctx.setReturnValue(value);
+    ctx.builder.CreateRet(value);
+    return value;
 }
 
-llvm::Value *NStructMember::codeGen(CodeGenContext &context) {
-    cout << "Generating struct member expression of " << this->id->name << "." << this->member->name << endl;
+llvm::Value* NIfStatement::codeGen(CodeGenContext& ctx) {
+    llvm::Value* condition = this->condition->codeGen(ctx);
+    if (!condition) {
+        return nullptr;
+    }
+    condition = toBoolean(ctx, condition);
 
-    auto varPtr = context.getSymbolValue(this->id->name);
-    auto structPtr = context.builder.CreateLoad(varPtr, "structPtr");
-    structPtr->setAlignment(4);
-
-    if( !structPtr->getType()->isStructTy() ){
-        return LogErrorV("The variable is not struct");
+    llvm::Function* function = ctx.builder.GetInsertBlock()->getParent();
+    if (!function) {
+        return LogErrorV("if 语句必须写在函数里");
     }
 
-    string structName = structPtr->getType()->getStructName().str();
-    long memberIndex = context.typeSystem.getStructMemberIndex(structName, this->member->name);
+    llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(ctx.llvmContext, "then", function);
+    llvm::BasicBlock* elseBlock =
+        this->falseBlock ? llvm::BasicBlock::Create(ctx.llvmContext, "else", function) : nullptr;
+    llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(ctx.llvmContext, "ifcont", function);
 
-    std::vector<Value*> indices;
-    indices.push_back(ConstantInt::get(context.typeSystem.intTy, 0, false));
-    indices.push_back(ConstantInt::get(context.typeSystem.intTy, (uint64_t)memberIndex, false));
-    auto ptr = context.builder.CreateInBoundsGEP(varPtr, indices, "memberPtr");
+    ctx.builder.CreateCondBr(condition, thenBlock, elseBlock ? elseBlock : mergeBlock);
 
-    return context.builder.CreateLoad(ptr);
-}
-
-llvm::Value* NStructAssignment::codeGen(CodeGenContext &context) {
-    cout << "Generating struct assignment of " << this->structMember->id->name << "." << this->structMember->member->name << endl;
-    auto varPtr = context.getSymbolValue(this->structMember->id->name);
-    auto structPtr = context.builder.CreateLoad(varPtr, "structPtr");
-//    auto underlyingStruct = context.builder.CreateLoad(load);
-    structPtr->setAlignment(4);
-
-    if( !structPtr->getType()->isStructTy() ){
-        return LogErrorV("The variable is not struct");
+    // then 分支
+    ctx.builder.SetInsertPoint(thenBlock);
+    ctx.pushScope();
+    this->trueBlock->codeGen(ctx);
+    ctx.popScope();
+    if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+        ctx.builder.CreateBr(mergeBlock);
     }
 
-    string structName = structPtr->getType()->getStructName().str();
-    long memberIndex = context.typeSystem.getStructMemberIndex(structName, this->structMember->member->name);
-
-    std::vector<Value*> indices;
-    auto value = this->expression->codeGen(context);
-//    auto index = ;
-    indices.push_back(ConstantInt::get(context.typeSystem.intTy, 0, false));
-    indices.push_back(ConstantInt::get(context.typeSystem.intTy, (uint64_t)memberIndex, false));
-
-    auto ptr = context.builder.CreateInBoundsGEP(varPtr, indices, "structMemberPtr");
-
-    return context.builder.CreateStore(value, ptr);
-}
-
-llvm::Value *NArrayIndex::codeGen(CodeGenContext &context) {
-    cout << "Generating array index expression of " << this->arrayName->name << endl;
-    auto varPtr = context.getSymbolValue(this->arrayName->name);
-    auto type = context.getSymbolType(this->arrayName->name);
-    string typeStr = type->name;
-
-    assert(type->isArray);
-
-    auto value = calcArrayIndex(make_shared<NArrayIndex>(*this), context);
-    ArrayRef<Value*> indices;
-    if(context.isFuncArg(this->arrayName->name) ){
-        cout << "isFuncArg" << endl;
-        varPtr = context.builder.CreateLoad(varPtr, "actualArrayPtr");
-        indices = { value };
-    }else if( varPtr->getType()->isPointerTy() ){
-        cout << this->arrayName->name << "Not isFuncArg" << endl;
-        indices = { ConstantInt::get(Type::getInt64Ty(context.llvmContext), 0), value };
-    }else{
-        return LogErrorV("The variable is not array");
+    // else 分支
+    if (elseBlock) {
+        ctx.builder.SetInsertPoint(elseBlock);
+        ctx.pushScope();
+        this->falseBlock->codeGen(ctx);
+        ctx.popScope();
+        if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+            ctx.builder.CreateBr(mergeBlock);
+        }
     }
-    auto ptr = context.builder.CreateInBoundsGEP(varPtr, indices, "elementPtr");
 
-    return context.builder.CreateAlignedLoad(ptr, 4);
-}
+    ctx.builder.SetInsertPoint(mergeBlock);
 
-
-llvm::Value *NArrayAssignment::codeGen(CodeGenContext &context) {
-    cout << "Generating array index assignment of " << this->arrayIndex->arrayName->name << endl;
-    auto varPtr = context.getSymbolValue(this->arrayIndex->arrayName->name);
-
-    if( varPtr == nullptr ){
-        return LogErrorV("Unknown variable name");
-    }
-    
-    auto arrayPtr = context.builder.CreateLoad(varPtr, "arrayPtr");
-//    arrayPtr->setAlignment(16);
-
-    if( !arrayPtr->getType()->isArrayTy() && !arrayPtr->getType()->isPointerTy() ){
-        return LogErrorV("The variable is not array");
-    }
-//    std::vector<Value*> indices;
-    auto index = calcArrayIndex(arrayIndex, context);
-//    cout << "here2" << endl;
-    ArrayRef<Value*> gep2_array{ ConstantInt::get(Type::getInt64Ty(context.llvmContext), 0), index };
-    auto ptr = context.builder.CreateInBoundsGEP(varPtr, gep2_array, "elementPtr");
-
-    return context.builder.CreateAlignedStore(this->expression->codeGen(context), ptr, 4);
-}
-
-llvm::Value *NArrayInitialization::codeGen(CodeGenContext &context) {
-    cout << "Generating array initialization of " << this->declaration->id->name << endl;
-    auto arrayPtr = this->declaration->codeGen(context);
-    auto sizeVec = context.getArraySize(this->declaration->id->name);
-    // TODO: multi-dimension array initialization
-    assert(sizeVec.size() == 1);
-
-    for(int index=0; index < this->expressionList->size(); index++){
-        shared_ptr<NInteger> indexValue = make_shared<NInteger>(index);
-
-        shared_ptr<NArrayIndex> arrayIndex = make_shared<NArrayIndex>(this->declaration->id, indexValue);
-        NArrayAssignment assignment(arrayIndex, this->expressionList->at(index));
-        assignment.codeGen(context);
+    // 分支里可能还有嵌套的 if，它们会在合并块之后继续创建新的块。
+    // 把合并块挪到函数块列表的末尾，保证列表顺序和实际的执行顺序一致。
+    llvm::BasicBlock* lastBlock = &function->back();
+    if (lastBlock != mergeBlock) {
+        mergeBlock->moveAfter(lastBlock);
     }
     return nullptr;
 }
 
-llvm::Value *NLiteral::codeGen(CodeGenContext &context) {
-    return context.builder.CreateGlobalString(this->value, "string");
-}
+llvm::Value* NForStatement::codeGen(CodeGenContext& ctx) {
+    llvm::Function* function = ctx.builder.GetInsertBlock()->getParent();
+    if (!function) {
+        return LogErrorV("for 语句必须写在函数里");
+    }
 
-/*
- * Global Functions
- *
- */
+    llvm::BasicBlock* condBlock = llvm::BasicBlock::Create(ctx.llvmContext, "for.cond", function);
+    llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(ctx.llvmContext, "for.body", function);
+    llvm::BasicBlock* endBlock = llvm::BasicBlock::Create(ctx.llvmContext, "for.end", function);
 
+    // 初始化语句在外层作用域里执行
+    if (this->initial) {
+        this->initial->codeGen(ctx);
+    }
 
-std::unique_ptr<NExpression> LogError(const char *str) {
-    fprintf(stderr, "LogError: %s\n", str);
+    ctx.builder.CreateBr(condBlock);
+
+    // 条件
+    ctx.builder.SetInsertPoint(condBlock);
+    llvm::Value* condition = this->condition ? this->condition->codeGen(ctx) : nullptr;
+    if (!condition) {
+        return nullptr;
+    }
+    condition = toBoolean(ctx, condition);
+    ctx.builder.CreateCondBr(condition, bodyBlock, endBlock);
+
+    // 循环体
+    ctx.builder.SetInsertPoint(bodyBlock);
+    ctx.pushScope();
+    this->body->codeGen(ctx);
+    ctx.popScope();
+
+    // 递增语句
+    if (this->increment) {
+        this->increment->codeGen(ctx);
+    }
+    if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+        ctx.builder.CreateBr(condBlock);
+    }
+
+    ctx.builder.SetInsertPoint(endBlock);
+
+    // 同理，循环体里可能还有嵌套的块，结束块要排在它们后面
+    llvm::BasicBlock* lastBlock = &function->back();
+    if (lastBlock != endBlock) {
+        endBlock->moveAfter(lastBlock);
+    }
     return nullptr;
 }
 
-Value *LogErrorV(string str){
-    return LogErrorV(str.c_str());
+llvm::Value* NArrayInitialization::codeGen(CodeGenContext& ctx) {
+    this->declaration->codeGen(ctx);
+    Symbol* symbol = ctx.findSymbol(this->declaration->id->name);
+    if (!symbol) {
+        return LogErrorV("未定义的变量：" + this->declaration->id->name);
+    }
+
+    Type* intType = ctx.typeSystem.typeByName("int");
+    for (size_t i = 0; i < this->elements.size(); ++i) {
+        llvm::Value* value = this->elements[i]->codeGen(ctx);
+        if (!value) {
+            return nullptr;
+        }
+        value = ctx.typeSystem.cast(value, symbol->type, ctx.builder);
+        llvm::Value* index = llvm::ConstantInt::get(intType, i);
+        llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+        ctx.builder.CreateStore(value, elementPtr);
+    }
+    return nullptr;
 }
 
-Value *LogErrorV(const char *str) {
-    LogError(str);
+// ---------------------------------------------------------------------------
+// 错误处理
+// ---------------------------------------------------------------------------
+
+llvm::Value* LogErrorV(const std::string& message) {
+    LogError(message);
     return nullptr;
 }

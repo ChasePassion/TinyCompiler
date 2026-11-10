@@ -1,0 +1,8 @@
+sign(-5)=-1
+negative=1
+modulo=2
+truthy(2)=1
+truthy(0)=0
+arrays=123
+half=2.500000
+later(21)=42

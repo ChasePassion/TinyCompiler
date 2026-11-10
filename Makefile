@@ -1,42 +1,30 @@
-all: compiler
+# 这是一个包装脚本，真正的构建逻辑在 CMakeLists.txt 里。
+# 直接用 cmake 也可以：
+#
+#   cmake -B build -S . && cmake --build build
+#
+# 需要先准备好 LLVM（含 C++ 头文件）、flex 和 bison。
 
-OBJS = grammar.o \
-		token.o  \
-		CodeGen.o \
-		utils.o \
-		main.o	 \
-		ObjGen.o \
-		TypeSystem.o \
+BUILD_DIR ?= build
+BUILD_TYPE ?= Release
 
-LLVMCONFIG = llvm-config-3.9
-CPPFLAGS = `$(LLVMCONFIG) --cppflags` -std=c++11
-LDFLAGS = `$(LLVMCONFIG) --ldflags` -lpthread -ldl -lz -lncurses -rdynamic -L/usr/local/lib -ljsoncpp
-LIBS = `$(LLVMCONFIG) --libs`
+.PHONY: all configure build test clean run
+
+all: build
+
+configure:
+	cmake -B $(BUILD_DIR) -S . -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+
+build: configure
+	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE)
+
+# 用 tests/ 下的用例跑一遍
+test: build
+	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --target test
+
+run: build
+	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --target run
 
 clean:
-	$(RM) -rf grammar.cpp grammar.hpp test compiler tokens.cpp *.output $(OBJS)
-
-ObjGen.cpp: ObjGen.h
-
-CodeGen.cpp: CodeGen.h ASTNodes.h
-
-grammar.cpp: grammar.y
-	bison -d -o $@ $<
-
-grammar.hpp: grammar.cpp
-
-token.cpp: token.l grammar.hpp
-	flex -o $@ $<
-
-%.o: %.cpp
-	g++ -c $(CPPFLAGS) -o $@ $<
-
-compiler: $(OBJS)
-	g++ $(CPPFLAGS) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
-
-test: compiler test.input
-	cat test.input | ./compiler
-
-testlink: output.o testmain.cpp
-	clang output.o testmain.cpp -o test
-	./test
+	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --target clean
+	rm -rf $(BUILD_DIR)

@@ -1,78 +1,93 @@
 %{
-#include <stdio.h>
+#include <cstdio>
 #include <string>
+
+#ifdef _WIN32
+// Windows 没有 unistd.h，但 flex 需要 isatty/fileno 来判断输入是不是终端。
+// <io.h> 提供了 Windows 版本的这两个函数，并定义 YY_NO_UNISTD_H 让 flex
+// 不要再 include <unistd.h>。
+#include <io.h>
+#define YY_NO_UNISTD_H
+#undef isatty
+#undef fileno
+#define isatty _isatty
+#define fileno _fileno
+#endif
+
 #include "ASTNodes.h"
 #include "grammar.hpp"
-#define SAVE_TOKEN yylval.string = new string(yytext)
-#define TOKEN(t) ( yylval.token = t)
+#include "utils.h"
 
-static FILE* yyparse_file_ptr;
+// 词法分析器当前所在的行号，报语法错误时用
+int currentLine = 1;
 
-// void yyparse_init(const char* filename)
-// {
-// 	yyparse_file_ptr = fopen(filename, "r");
-// 	yyin = yyparse_file_ptr;
-// }
-
-// void yyparse_cleanup()
-// {
-// 	fclose(yyparse_file_ptr);
-// }
-
+// 关键字和标识符的文本都存到 yylval.text 里，用完记得 delete
+#define SAVE_TOKEN yylval.text = new std::string(yytext)
+#define TOKEN(t)   (yylval.token = (t))
 %}
 
 %option noyywrap
 
 %%
-"#".*                   ;
-[ \t\r\n]				;
-"if"                    puts("TIF"); return TOKEN(TIF);
-"else"                  puts("TELSE"); return TOKEN(TELSE);
-"return"                puts("TRETURN"); return TOKEN(TRETURN);
-"for"                   puts("TFOR"); return TOKEN(TFOR);
-"while"                 puts("TWHILE"); return TOKEN(TWHILE);
-"struct"                puts("TSTRUCT"); return TOKEN(TSTRUCT);
-"int"                   SAVE_TOKEN; puts("TYINT");  return TYINT;
-"double"                SAVE_TOKEN; puts("TYDOUBLE"); return TYDOUBLE;
-"float"                 SAVE_TOKEN; puts("TYFLOAT"); return TYFLOAT;
-"char"                  SAVE_TOKEN; puts("TYCHAR"); return TYCHAR;
-"bool"                  SAVE_TOKEN; puts("TYBOOL"); return TYBOOL;
-"string"                SAVE_TOKEN; puts("TYSTRING"); return TYSTRING;
-"void"                  SAVE_TOKEN; puts("TYVOID"); return TYVOID;
-"extern"                SAVE_TOKEN; puts("TEXTERN"); return TEXTERN;
-[a-zA-Z_][a-zA-Z0-9_]*	SAVE_TOKEN; puts("TIDENTIFIER"); return TIDENTIFIER;
-[0-9]+\.[0-9]*			SAVE_TOKEN; puts("TDOUBLE"); return TDOUBLE;
-[0-9]+  				SAVE_TOKEN; puts("TINTEGER"); return TINTEGER;
-\"(\\.|[^"])*\"         SAVE_TOKEN; puts("TLITERAL"); return TLITERAL;
-"="						puts("TEQUAL"); return TOKEN(TEQUAL);
-"=="					puts("TCEQ"); return TOKEN(TCEQ);
-"!="                    puts("TCNE"); return TOKEN(TCNE);
-"<"                     puts("TCLT"); return TOKEN(TCLT);
-"<="                    puts("TCLE"); return TOKEN(TCLE);
-">"                     puts("TCGT"); return TOKEN(TCGT);
-">="                    puts("TCGE"); return TOKEN(TCGE);
-"("                     puts("TLPAREN"); return TOKEN(TLPAREN);
-")"                     puts("TRPAREN"); return TOKEN(TRPAREN);
-"{"                     puts("TLBRACE"); return TOKEN(TLBRACE);
-"}"                     puts("TRBRACE"); return TOKEN(TRBRACE);
-"["                     puts("TLBRACKET"); return TOKEN(TLBRACKET);
-"]"                     puts("TRBRACKET"); return TOKEN(TRBRACKET);
-"."                     puts("TDOT"); return TOKEN(TDOT);
-","                     puts("TCOMMA"); return TOKEN(TCOMMA);
-"+"                     puts("TPLUS"); return TOKEN(TPLUS);
-"-"                     puts("TMINUS"); return TOKEN(TMINUS);
-"*"                     puts("TMUL"); return TOKEN(TMUL);
-"/"                     puts("TDIV"); return TOKEN(TDIV);
-"&"                     puts("TAND"); return TOKEN(TAND);
-"|"                     puts("TOR"); return TOKEN(TOR);
-"^"                     puts("TXOR"); return TOKEN(TXOR);
-"%"                     puts("TMOD"); return TOKEN(TMOD);
-">>"                    puts("TSHIFTR"); return TOKEN(TSHIFTR);
-"<<"                    puts("TSHIFTL"); return TOKEN(TSHIFTL);
-";"                     puts("TSEMICOLON"); return TOKEN(TSEMICOLON);
-.						printf("Unknown token:%s\n", yytext); yyterminate();
 
-
+"#"[^\n]*                ;
+[ \t\r\n]+              {
+                           for (char* p = yytext; *p; ++p) {
+                               if (*p == '\n') { ++currentLine; }
+                           }
+                         }
+"if"                    return TOKEN(TIF);
+"else"                  return TOKEN(TELSE);
+"return"                return TOKEN(TRETURN);
+"for"                   return TOKEN(TFOR);
+"while"                 return TOKEN(TWHILE);
+"struct"                return TOKEN(TSTRUCT);
+"int"                   SAVE_TOKEN; return TYINT;
+"double"                SAVE_TOKEN; return TYDOUBLE;
+"float"                 SAVE_TOKEN; return TYFLOAT;
+"char"                  SAVE_TOKEN; return TYCHAR;
+"bool"                  SAVE_TOKEN; return TYBOOL;
+"string"                SAVE_TOKEN; return TYSTRING;
+"void"                  SAVE_TOKEN; return TYVOID;
+"extern"                SAVE_TOKEN; return TEXTERN;
+[a-zA-Z_][a-zA-Z0-9_]*   SAVE_TOKEN; return TIDENTIFIER;
+[0-9]+\.[0-9]*          SAVE_TOKEN; return TDOUBLE;
+[0-9]+                  SAVE_TOKEN; return TINTEGER;
+\"(\\.|[^"])*\"         {
+                           // 去掉两端的引号并处理转义，yylval 里放的是真正的内容
+                           yylval.text = new std::string(UnescapeStringLiteral(yytext));
+                           return TLITERAL;
+                         }
+"=="                    return TOKEN(TCEQ);
+"!="                    return TOKEN(TCNE);
+"<="                    return TOKEN(TCLE);
+">="                    return TOKEN(TCGE);
+"<<"                    return TOKEN(TSHIFTL);
+">>"                    return TOKEN(TSHIFTR);
+"<"                     return TOKEN(TCLT);
+">"                     return TOKEN(TCGT);
+"="                     return TOKEN(TEQUAL);
+"("                     return TOKEN(TLPAREN);
+")"                     return TOKEN(TRPAREN);
+"{"                     return TOKEN(TLBRACE);
+"}"                     return TOKEN(TRBRACE);
+"["                     return TOKEN(TLBRACKET);
+"]"                     return TOKEN(TRBRACKET);
+"."                     return TOKEN(TDOT);
+","                     return TOKEN(TCOMMA);
+"+"                     return TOKEN(TPLUS);
+"-"                     return TOKEN(TMINUS);
+"*"                     return TOKEN(TMUL);
+"/"                     return TOKEN(TDIV);
+"&"                     return TOKEN(TAND);
+"|"                     return TOKEN(TOR);
+"^"                     return TOKEN(TXOR);
+"%"                     return TOKEN(TMOD);
+";"                     return TOKEN(TSEMICOLON);
+.                       {
+                           fprintf(stderr, "error: 第 %d 行: 无法识别的字符 '%s'\n",
+                                   currentLine, yytext);
+                           yyterminate();
+                       }
 
 %%
-

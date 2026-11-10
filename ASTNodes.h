@@ -1,881 +1,502 @@
-
-#ifndef __ASTNODES_H__
-#define __ASTNODES_H__
+#ifndef TINYCOMPILER_ASTNODES_H
+#define TINYCOMPILER_ASTNODES_H
 
 #include <llvm/IR/Value.h>
-#include <json/json.h>
-#include <iostream>
-#include <vector>
 
+#include <cstdint>
 #include <memory>
 #include <string>
-
-//puts("$1"); return $1;
-using std::cout;
-using std::endl;
-using std::string;
-using std::shared_ptr;
-using std::make_shared;
+#include <vector>
 
 class CodeGenContext;
-class NBlock;
-class NStatement;
-class NExpression;
-class NVariableDeclaration;
 
-typedef std::vector<shared_ptr<NStatement>> StatementList;
-typedef std::vector<shared_ptr<NExpression>> ExpressionList;
-typedef std::vector<shared_ptr<NVariableDeclaration>> VariableList;
-
-class Node {
-protected:
-	const char m_DELIM = ':';
-	const char* m_PREFIX = "--";
-public:
-    Node(){}
-	virtual ~Node() {}
-	virtual string getTypeName() const = 0;
-	virtual void print(string prefix) const{}
-	virtual llvm::Value *codeGen(CodeGenContext &context) { return (llvm::Value *)0; }
-	virtual Json::Value jsonGen() const { return Json::Value(); }
+// 二元运算符。用枚举而不是 bison 的 token 编号，好处是语法树节点不依赖
+// 语法分析器生成的头文件，AST 可以独立地打印、序列化、单元测试。
+enum BinOp {
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD,
+    OP_AND, OP_OR, OP_XOR, OP_SHL, OP_SHR,
+    OP_LT, OP_LE, OP_GT, OP_GE, OP_EQ, OP_NE
 };
 
+const char* OpName(BinOp op);
+
+// ---------------------------------------------------------------------------
+// AST 节点基类
+//
+// 所有语法树节点都继承自 Node。基类统一提供 print()（文本形式）和 toJson()
+// （AST 可视化用），子类一般只需要实现其中的一两个方法：
+//
+//   getTypeName()   节点类型名，必须实现
+//   label()         节点在树上的显示文本，可选，默认等于类型名
+//   children()      子节点列表，可选，默认空
+//   codeGen()       生成 LLVM IR，可选，默认什么都不生成
+// ---------------------------------------------------------------------------
+class Node {
+public:
+    virtual ~Node() = default;
+
+    virtual const char* getTypeName() const = 0;
+    virtual std::string label() const { return getTypeName(); }
+    virtual std::vector<Node*> children() const { return {}; }
+    virtual llvm::Value* codeGen(CodeGenContext& context) { (void)context; return nullptr; }
+
+    // 按 prefix 缩进打印整棵子树
+    void print(const std::string& prefix = "") const;
+    // 输出 JSON，供 visualization/ 下的脚本绘制语法树
+    std::string toJson() const;
+};
+
+// ---------------------------------------------------------------------------
+// 类型引用
+//
+// int / double / float / char / bool / string / void
+// struct Point
+// int[3][4]
+//
+// 数组维度存放在这里，变量本身（NIdentifier）不再需要 isType / isArray 标志位。
+// ---------------------------------------------------------------------------
+class NTypeRef : public Node {
+public:
+    std::string name;              // 类型名
+    std::vector<uint64_t> dims;    // 数组各维长度；为空表示不是数组
+
+    NTypeRef() = default;
+    explicit NTypeRef(std::string n) : name(std::move(n)) {}
+
+    const char* getTypeName() const override { return "NTypeRef"; }
+    std::string label() const override {
+        std::string s = name;
+        for (uint64_t d : dims) {
+            s += "[" + std::to_string(d) + "]";
+        }
+        return s;
+    }
+
+    bool isArray() const { return !dims.empty(); }
+
+    // 数组元素总数。多维数组在内存里展平成一维，和 C 的行主序布局一致。
+    uint64_t elementCount() const {
+        uint64_t n = 1;
+        for (uint64_t d : dims) {
+            n *= d;
+        }
+        return n;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// 表达式
+// ---------------------------------------------------------------------------
 class NExpression : public Node {
 public:
-    NExpression(){}
-
-	string getTypeName() const override {
-		return "NExpression";
-	}
-
-    virtual void print(string prefix) const override{
-        cout << prefix << getTypeName() << endl;
-    }
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        return root;
-    }
-
+    const char* getTypeName() const override { return "NExpression"; }
 };
 
-class NStatement : public Node {
-public:
-    NStatement(){}
-
-	string getTypeName() const override {
-		return "NStatement";
-	}
-    virtual void print(string prefix) const override{
-        cout << prefix << getTypeName() << endl;
-    }
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        return root;
-    }
-};
-
-class NDouble : public NExpression {
-public:
-	double value;
-
-    NDouble(){}
-
-	NDouble(double value)
-		: value(value) {
-		// return "NDoub le=" << value << endl;
-	}
-
-	string getTypeName() const override {
-		return "NDouble";
-	}
-
-	void print(string prefix) const override{
-		cout << prefix << getTypeName() << this->m_DELIM << value << endl;
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName() + this->m_DELIM + std::to_string(value);
-        return root;
-    }
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
-};
-
+// 整数字面量
 class NInteger : public NExpression {
 public:
-    uint64_t value;
+    int64_t value = 0;
 
-    NInteger(){}
+    NInteger() = default;
+    explicit NInteger(int64_t v) : value(v) {}
 
-    NInteger(uint64_t value)
-            : value(value) {
-
+    const char* getTypeName() const override { return "NInteger"; }
+    std::string label() const override {
+        return std::string(getTypeName()) + ":" + std::to_string(value);
     }
-
-    string getTypeName() const override {
-        return "NInteger";
-    }
-
-    void print(string prefix) const override{
-        cout << prefix << getTypeName() << this->m_DELIM << value << endl;
-    }
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName() + this->m_DELIM + std::to_string(value);
-        return root;
-    }
-
-    operator NDouble(){
-        return NDouble(value);
-    }
-
-    virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
+// 浮点字面量
+class NDouble : public NExpression {
+public:
+    double value = 0.0;
+
+    NDouble() = default;
+    explicit NDouble(double v) : value(v) {}
+
+    const char* getTypeName() const override { return "NDouble"; }
+    std::string label() const override {
+        return std::string(getTypeName()) + ":" + std::to_string(value);
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// 字符串字面量
+class NLiteral : public NExpression {
+public:
+    std::string value;
+
+    NLiteral() = default;
+    explicit NLiteral(std::string v) : value(std::move(v)) {}
+
+    const char* getTypeName() const override { return "NLiteral"; }
+    std::string label() const override {
+        return std::string(getTypeName()) + ":" + value;
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// 标识符（变量名 / 函数名 / 结构体成员名）
 class NIdentifier : public NExpression {
 public:
-	std::string name;
-    bool isType = false;
-    bool isArray = false;
+    std::string name;
 
-    shared_ptr<ExpressionList> arraySize = make_shared<ExpressionList>();
+    NIdentifier() = default;
+    explicit NIdentifier(std::string n) : name(std::move(n)) {}
 
-    NIdentifier(){}
-
-	NIdentifier(const std::string &name)
-		: name(name) {
-		// return "NIdentifier=" << name << endl;
-	}
-
-	string getTypeName() const override {
-		return "NIdentifier";
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName() + this->m_DELIM + name + (isArray ? "(Array)" : "");
-        for(auto it=arraySize->begin(); it!=arraySize->end(); it++){
-            root["children"].append((*it)->jsonGen());
-        }
-        return root;
+    const char* getTypeName() const override { return "NIdentifier"; }
+    std::string label() const override {
+        return std::string(getTypeName()) + ":" + name;
     }
-
-	void print(string prefix) const override{
-        string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << name << (isArray ? "(Array)" : "") << endl;
-        if( isArray && arraySize->size() > 0 ){
-//            assert(arraySize != nullptr);
-            for(auto it=arraySize->begin(); it!=arraySize->end(); it++){
-                (*it)->print(nextPrefix);
-            }
-        }
-	}
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
-class NMethodCall: public NExpression {
-public:
-	const shared_ptr<NIdentifier> id;
-	shared_ptr<ExpressionList> arguments = make_shared<ExpressionList>();
-
-    NMethodCall(){
-
-    }
-
-	NMethodCall(const shared_ptr<NIdentifier> id, shared_ptr<ExpressionList> arguments)
-		: id(id), arguments(arguments) {
-	}
-
-	NMethodCall(const shared_ptr<NIdentifier> id)
-		: id(id) {
-	}
-
-	string getTypeName() const override {
-		return "NMethodCall";
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(this->id->jsonGen());
-        for(auto it=arguments->begin(); it!=arguments->end(); it++){
-            root["children"].append((*it)->jsonGen());
-        }
-        return root;
-    }
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << endl;
-		this->id->print(nextPrefix);
-		for(auto it=arguments->begin(); it!=arguments->end(); it++){
-			(*it)->print(nextPrefix);
-		}
-	}
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
-};
-
+// 二元运算
 class NBinaryOperator : public NExpression {
 public:
-	int op;
-	shared_ptr<NExpression> lhs;
-	shared_ptr<NExpression> rhs;
+    BinOp op = OP_ADD;
+    std::shared_ptr<NExpression> lhs;
+    std::shared_ptr<NExpression> rhs;
 
-    NBinaryOperator(){}
+    NBinaryOperator() = default;
+    NBinaryOperator(std::shared_ptr<NExpression> l, BinOp o, std::shared_ptr<NExpression> r)
+        : lhs(std::move(l)), rhs(std::move(r)), op(o) {}
 
-    NBinaryOperator(shared_ptr<NExpression> lhs, int op, shared_ptr<NExpression> rhs)
-            : lhs(lhs), rhs(rhs), op(op) {
+    const char* getTypeName() const override { return "NBinaryOperator"; }
+    std::string label() const override {
+        return std::string(getTypeName()) + ":" + OpName(op);
     }
-
-	string getTypeName() const override {
-		return "NBinaryOperator";
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName() + this->m_DELIM + std::to_string(op);
-
-        root["children"].append(lhs->jsonGen());
-        root["children"].append(rhs->jsonGen());
-
-        return root;
+    std::vector<Node*> children() const override {
+        return {lhs.get(), rhs.get()};
     }
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << op << endl;
-
-		lhs->print(nextPrefix);
-		rhs->print(nextPrefix);
-	}
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
+// 赋值 a = b
 class NAssignment : public NExpression {
 public:
-	shared_ptr<NIdentifier> lhs;
-	shared_ptr<NExpression> rhs;
+    std::shared_ptr<NIdentifier> lhs;
+    std::shared_ptr<NExpression> rhs;
 
-    NAssignment(){}
+    NAssignment() = default;
+    NAssignment(std::shared_ptr<NIdentifier> l, std::shared_ptr<NExpression> r)
+        : lhs(std::move(l)), rhs(std::move(r)) {}
 
-	NAssignment(shared_ptr<NIdentifier> lhs, shared_ptr<NExpression> rhs)
-		: lhs(lhs), rhs(rhs) {
-	}
-
-	string getTypeName() const override {
-		return "NAssignment";
-	}
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << endl;
-		lhs->print(nextPrefix);
-		rhs->print(nextPrefix);
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(lhs->jsonGen());
-        root["children"].append(rhs->jsonGen());
-        return root;
+    const char* getTypeName() const override { return "NAssignment"; }
+    std::vector<Node*> children() const override {
+        return {lhs.get(), rhs.get()};
     }
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
-class NBlock : public NExpression {
+// 函数调用
+class NMethodCall : public NExpression {
 public:
-	shared_ptr<StatementList> statements = make_shared<StatementList>();
+    std::shared_ptr<NIdentifier> id;
+    std::vector<std::shared_ptr<NExpression>> args;
 
-    NBlock(){
+    NMethodCall() = default;
+    NMethodCall(std::shared_ptr<NIdentifier> i, std::vector<std::shared_ptr<NExpression>> a)
+        : id(std::move(i)), args(std::move(a)) {}
 
-    }
-
-	string getTypeName() const override {
-		return "NBlock";
-	}
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << endl;
-		for(auto it=statements->begin(); it!=statements->end(); it++){
-			(*it)->print(nextPrefix);
-		}
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        for(auto it=statements->begin(); it!=statements->end(); it++){
-            root["children"].append((*it)->jsonGen());
+    const char* getTypeName() const override { return "NMethodCall"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out;
+        out.push_back(id.get());
+        for (auto& a : args) {
+            out.push_back(a.get());
         }
-        return root;
+        return out;
     }
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
+// 结构体成员访问 p.x
+class NStructMember : public NExpression {
+public:
+    std::shared_ptr<NIdentifier> id;      // 结构体变量
+    std::shared_ptr<NIdentifier> member;  // 成员名
+
+    NStructMember() = default;
+    NStructMember(std::shared_ptr<NIdentifier> i, std::shared_ptr<NIdentifier> m)
+        : id(std::move(i)), member(std::move(m)) {}
+
+    const char* getTypeName() const override { return "NStructMember"; }
+    std::vector<Node*> children() const override {
+        return {id.get(), member.get()};
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// 数组元素 arr[i][j]
+class NArrayIndex : public NExpression {
+public:
+    std::shared_ptr<NIdentifier> arrayName;
+    std::vector<std::shared_ptr<NExpression>> exprs;
+
+    NArrayIndex() = default;
+    NArrayIndex(std::shared_ptr<NIdentifier> n, std::vector<std::shared_ptr<NExpression>> e)
+        : arrayName(std::move(n)), exprs(std::move(e)) {}
+
+    const char* getTypeName() const override { return "NArrayIndex"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out;
+        out.push_back(arrayName.get());
+        for (auto& e : exprs) {
+            out.push_back(e.get());
+        }
+        return out;
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// 数组元素赋值 arr[i] = v
+class NArrayAssignment : public NExpression {
+public:
+    std::shared_ptr<NArrayIndex> index;
+    std::shared_ptr<NExpression> expression;
+
+    NArrayAssignment() = default;
+    NArrayAssignment(std::shared_ptr<NArrayIndex> i, std::shared_ptr<NExpression> e)
+        : index(std::move(i)), expression(std::move(e)) {}
+
+    const char* getTypeName() const override { return "NArrayAssignment"; }
+    std::vector<Node*> children() const override {
+        return {index.get(), expression.get()};
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// 结构体成员赋值 p.x = v
+class NStructAssignment : public NExpression {
+public:
+    std::shared_ptr<NStructMember> member;
+    std::shared_ptr<NExpression> expression;
+
+    NStructAssignment() = default;
+    NStructAssignment(std::shared_ptr<NStructMember> m, std::shared_ptr<NExpression> e)
+        : member(std::move(m)), expression(std::move(e)) {}
+
+    const char* getTypeName() const override { return "NStructAssignment"; }
+    std::vector<Node*> children() const override {
+        return {member.get(), expression.get()};
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// ---------------------------------------------------------------------------
+// 语句
+// ---------------------------------------------------------------------------
+class NStatement : public Node {
+public:
+    const char* getTypeName() const override { return "NStatement"; }
+};
+
+// 语句块 { ... }
+class NBlock : public NStatement {
+public:
+    std::vector<std::shared_ptr<NStatement>> statements;
+
+    NBlock() = default;
+    explicit NBlock(std::vector<std::shared_ptr<NStatement>> s)
+        : statements(std::move(s)) {}
+
+    const char* getTypeName() const override { return "NBlock"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out;
+        for (auto& s : statements) {
+            out.push_back(s.get());
+        }
+        return out;
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// 表达式语句
 class NExpressionStatement : public NStatement {
 public:
-	shared_ptr<NExpression> expression;
+    std::shared_ptr<NExpression> expression;
 
-    NExpressionStatement(){}
+    NExpressionStatement() = default;
+    explicit NExpressionStatement(std::shared_ptr<NExpression> e)
+        : expression(std::move(e)) {}
 
-	NExpressionStatement(shared_ptr<NExpression> expression)
-		: expression(expression) {
-	}
-
-	string getTypeName() const override {
-		return "NExpressionStatement";
-	}
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << endl;
-		expression->print(nextPrefix);
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(expression->jsonGen());
-        return root;
+    const char* getTypeName() const override { return "NExpressionStatement"; }
+    std::vector<Node*> children() const override {
+        return {expression.get()};
     }
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
+// 变量声明 int a = 1
 class NVariableDeclaration : public NStatement {
 public:
-	const shared_ptr<NIdentifier> type;
-	shared_ptr<NIdentifier> id;
-	shared_ptr<NExpression> assignmentExpr = nullptr;
+    std::shared_ptr<NTypeRef> type;
+    std::shared_ptr<NIdentifier> id;
+    std::shared_ptr<NExpression> init;
 
-    NVariableDeclaration(){}
+    NVariableDeclaration() = default;
+    NVariableDeclaration(std::shared_ptr<NTypeRef> t, std::shared_ptr<NIdentifier> i,
+                         std::shared_ptr<NExpression> in = nullptr)
+        : type(std::move(t)), id(std::move(i)), init(std::move(in)) {}
 
-	NVariableDeclaration(const shared_ptr<NIdentifier> type, shared_ptr<NIdentifier> id, shared_ptr<NExpression> assignmentExpr = NULL)
-		: type(type), id(id), assignmentExpr(assignmentExpr) {
-            cout << "isArray = " << type->isArray << endl;
-            assert(type->isType);
-            assert(!type->isArray || (type->isArray && type->arraySize != nullptr));
-	}
-
-	string getTypeName() const override {
-		return "NVariableDeclaration";
-	}
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << endl;
-		type->print(nextPrefix);
-		id->print(nextPrefix);
-        if( assignmentExpr != nullptr ){
-            assignmentExpr->print(nextPrefix);
+    const char* getTypeName() const override { return "NVariableDeclaration"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out{type.get(), id.get()};
+        if (init) {
+            out.push_back(init.get());
         }
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(type->jsonGen());
-        root["children"].append(id->jsonGen());
-        if( assignmentExpr != nullptr ){
-            root["children"].append(assignmentExpr->jsonGen());
-        }
-        return root;
+        return out;
     }
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
+// 函数声明 / 定义
 class NFunctionDeclaration : public NStatement {
 public:
-	shared_ptr<NIdentifier> type;
-    shared_ptr<NIdentifier> id;
-	shared_ptr<VariableList> arguments = make_shared<VariableList>();
-	shared_ptr<NBlock> block;
-    bool isExternal = false;
+    std::shared_ptr<NTypeRef> type;
+    std::shared_ptr<NIdentifier> id;
+    std::vector<std::shared_ptr<NVariableDeclaration>> params;
+    std::shared_ptr<NBlock> body;
+    bool isExtern = false;
 
-    NFunctionDeclaration(){}
+    NFunctionDeclaration() = default;
+    NFunctionDeclaration(std::shared_ptr<NTypeRef> t, std::shared_ptr<NIdentifier> i,
+                         std::vector<std::shared_ptr<NVariableDeclaration>> p,
+                         std::shared_ptr<NBlock> b, bool ext = false)
+        : type(std::move(t)), id(std::move(i)), params(std::move(p)),
+          body(std::move(b)), isExtern(ext) {}
 
-	NFunctionDeclaration(shared_ptr<NIdentifier> type, shared_ptr<NIdentifier> id, shared_ptr<VariableList> arguments, shared_ptr<NBlock> block, bool isExt = false)
-		: type(type), id(id), arguments(arguments), block(block), isExternal(isExt) {
-        assert(type->isType);
-	}
-
-	string getTypeName() const override {
-		return "NFunctionDeclaration";
-	}
-
-	void print(string prefix) const override{
-		string nextPrefix = prefix+this->m_PREFIX;
-		cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-		type->print(nextPrefix);
-		id->print(nextPrefix);
-
-		for(auto it=arguments->begin(); it!=arguments->end(); it++){
-			(*it)->print(nextPrefix);
-		}
-
-        assert(isExternal || block != nullptr);
-        if( block )
-		    block->print(nextPrefix);
-	}
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(type->jsonGen());
-        root["children"].append(id->jsonGen());
-
-        for(auto it=arguments->begin(); it!=arguments->end(); it++){
-            root["children"].append((*it)->jsonGen());
+    const char* getTypeName() const override { return "NFunctionDeclaration"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out{type.get(), id.get()};
+        for (auto& p : params) {
+            out.push_back(p.get());
         }
-
-        assert(isExternal || block != nullptr);
-        if( block ){
-            root["children"].append(block->jsonGen());
+        if (body) {
+            out.push_back(body.get());
         }
-
-        return root;
+        return out;
     }
-
-	virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
-class NStructDeclaration: public NStatement{
+// 结构体声明 struct Point { ... }
+class NStructDeclaration : public NStatement {
 public:
-    shared_ptr<NIdentifier> name;
-    shared_ptr<VariableList> members = make_shared<VariableList>();
+    std::shared_ptr<NIdentifier> name;
+    std::vector<std::shared_ptr<NVariableDeclaration>> members;
 
-    NStructDeclaration(){}
+    NStructDeclaration() = default;
+    NStructDeclaration(std::shared_ptr<NIdentifier> n,
+                       std::vector<std::shared_ptr<NVariableDeclaration>> m)
+        : name(std::move(n)), members(std::move(m)) {}
 
-    NStructDeclaration(shared_ptr<NIdentifier>  id, shared_ptr<VariableList> arguments)
-            : name(id), members(arguments){
-
-    }
-
-    string getTypeName() const override {
-        return "NStructDeclaration";
-    }
-
-    void print(string prefix) const override {
-        string nextPrefix = prefix+this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << this->name->name << endl;
-
-        for(auto it=members->begin(); it!=members->end(); it++){
-            (*it)->print(nextPrefix);
+    const char* getTypeName() const override { return "NStructDeclaration"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out;
+        out.push_back(name.get());
+        for (auto& m : members) {
+            out.push_back(m.get());
         }
+        return out;
     }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
 
+// return 表达式
+class NReturnStatement : public NStatement {
+public:
+    std::shared_ptr<NExpression> expression;
 
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName() + this->m_DELIM + this->name->name;
+    NReturnStatement() = default;
+    explicit NReturnStatement(std::shared_ptr<NExpression> e)
+        : expression(std::move(e)) {}
 
-        for(auto it=members->begin(); it!=members->end(); it++){
-            root["children"].append((*it)->jsonGen());
+    const char* getTypeName() const override { return "NReturnStatement"; }
+    std::vector<Node*> children() const override {
+        return {expression.get()};
+    }
+    llvm::Value* codeGen(CodeGenContext& context) override;
+};
+
+// if / else
+class NIfStatement : public NStatement {
+public:
+    std::shared_ptr<NExpression> condition;
+    std::shared_ptr<NBlock> trueBlock;
+    std::shared_ptr<NBlock> falseBlock;   // 可以为空
+
+    NIfStatement() = default;
+    NIfStatement(std::shared_ptr<NExpression> c, std::shared_ptr<NBlock> t,
+                 std::shared_ptr<NBlock> f = nullptr)
+        : condition(std::move(c)), trueBlock(std::move(t)), falseBlock(std::move(f)) {}
+
+    const char* getTypeName() const override { return "NIfStatement"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out{condition.get(), trueBlock.get()};
+        if (falseBlock) {
+            out.push_back(falseBlock.get());
         }
-
-        return root;
+        return out;
     }
-
-    virtual llvm::Value* codeGen(CodeGenContext& context) override ;
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
-class NReturnStatement: public NStatement{
+// for / while（while 会被改写成没有 initial 和 increment 的 for）
+class NForStatement : public NStatement {
 public:
-    shared_ptr<NExpression> expression;
+    std::shared_ptr<NExpression> initial;
+    std::shared_ptr<NExpression> condition;
+    std::shared_ptr<NExpression> increment;
+    std::shared_ptr<NBlock> body;
 
-    NReturnStatement(){}
+    NForStatement() = default;
+    NForStatement(std::shared_ptr<NBlock> b, std::shared_ptr<NExpression> i,
+                  std::shared_ptr<NExpression> c, std::shared_ptr<NExpression> inc)
+        : body(std::move(b)), initial(std::move(i)), condition(std::move(c)),
+          increment(std::move(inc)) {}
 
-    NReturnStatement(shared_ptr<NExpression>  expression)
-            : expression(expression) {
-
-    }
-
-    string getTypeName() const override {
-        return "NReturnStatement";
-    }
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(expression->jsonGen());
-        return root;
-    }
-
-    void print(string prefix) const override {
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        expression->print(nextPrefix);
-    }
-
-    virtual llvm::Value* codeGen(CodeGenContext& context) override ;
-
-};
-
-class NIfStatement: public NStatement{
-public:
-
-    shared_ptr<NExpression>  condition;
-    shared_ptr<NBlock> trueBlock;          // should not be null
-    shared_ptr<NBlock> falseBlock;         // can be null
-
-
-    NIfStatement(){}
-
-    NIfStatement(shared_ptr<NExpression>  cond, shared_ptr<NBlock> blk, shared_ptr<NBlock> blk2 = nullptr)
-            : condition(cond), trueBlock(blk), falseBlock(blk2){
-
-    }
-
-    string getTypeName() const override {
-        return "NIfStatement";
-    }
-
-    void print(string prefix) const override{
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        condition->print(nextPrefix);
-
-        trueBlock->print(nextPrefix);
-
-        if( falseBlock ){
-            falseBlock->print(nextPrefix);
+    const char* getTypeName() const override { return "NForStatement"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out;
+        if (initial) {
+            out.push_back(initial.get());
         }
-
-    }
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-        root["children"].append(condition->jsonGen());
-        root["children"].append(trueBlock->jsonGen());
-        if( falseBlock ){
-            root["children"].append(falseBlock->jsonGen());
+        if (condition) {
+            out.push_back(condition.get());
         }
-        return root;
-    }
-
-
-    llvm::Value *codeGen(CodeGenContext &context) override ;
-
-
-};
-
-class NForStatement: public NStatement{
-public:
-    shared_ptr<NExpression> initial, condition, increment;
-    shared_ptr<NBlock>  block;
-
-    NForStatement(){}
-
-    NForStatement(shared_ptr<NBlock> b, shared_ptr<NExpression> init = nullptr, shared_ptr<NExpression> cond = nullptr, shared_ptr<NExpression> incre = nullptr)
-            : block(b), initial(init), condition(cond), increment(incre){
-        if( condition == nullptr ){
-            condition = make_shared<NInteger>(1);
+        if (increment) {
+            out.push_back(increment.get());
         }
+        out.push_back(body.get());
+        return out;
     }
-
-    string getTypeName() const override{
-        return "NForStatement";
-    }
-
-    void print(string prefix) const override{
-
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        if( initial )
-            initial->print(nextPrefix);
-        if( condition )
-            condition->print(nextPrefix);
-        if( increment )
-            increment->print(nextPrefix);
-
-        block->print(nextPrefix);
-    }
-
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-
-        if( initial )
-            root["children"].append(initial->jsonGen());
-        if( condition )
-            root["children"].append(condition->jsonGen());
-        if( increment )
-            root["children"].append(increment->jsonGen());
-
-        return root;
-    }
-
-    llvm::Value *codeGen(CodeGenContext &context) override ;
-
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
-class NStructMember: public NExpression{
+// 数组初始化 int[3] a = [1, 2, 3]
+class NArrayInitialization : public NStatement {
 public:
-	shared_ptr<NIdentifier> id;
-	shared_ptr<NIdentifier> member;
+    std::shared_ptr<NVariableDeclaration> declaration;
+    std::vector<std::shared_ptr<NExpression>> elements;
 
-    NStructMember(){}
-    
-    NStructMember(shared_ptr<NIdentifier> structName, shared_ptr<NIdentifier>member)
-            : id(structName),member(member) {
-    }
+    NArrayInitialization() = default;
+    NArrayInitialization(std::shared_ptr<NVariableDeclaration> d,
+                         std::vector<std::shared_ptr<NExpression>> e)
+        : declaration(std::move(d)), elements(std::move(e)) {}
 
-    string getTypeName() const override{
-        return "NStructMember";
-    }
-
-    void print(string prefix) const override{
-
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        id->print(nextPrefix);
-        member->print(nextPrefix);
-    }
-
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-
-        root["children"].append(id->jsonGen());
-        root["children"].append(member->jsonGen());
-
-        return root;
-    }
-
-    llvm::Value *codeGen(CodeGenContext &context) override ;
-
-};
-
-class NArrayIndex: public NExpression{
-public:
-    shared_ptr<NIdentifier>  arrayName;
-//    shared_ptr<NExpression>  expression;
-    shared_ptr<ExpressionList> expressions = make_shared<ExpressionList>();
-
-    NArrayIndex(){}
-
-    NArrayIndex(shared_ptr<NIdentifier>  name, shared_ptr<NExpression>  exp)
-            : arrayName(name){
-        expressions->push_back(exp);
-    }
-
-
-    NArrayIndex(shared_ptr<NIdentifier>  name, shared_ptr<ExpressionList> list)
-            : arrayName(name), expressions(list){
-    }
-
-    string getTypeName() const override{
-        return "NArrayIndex";
-    }
-
-    void print(string prefix) const override{
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        arrayName->print(nextPrefix);
-        for(auto it=expressions->begin(); it!=expressions->end(); it++){
-            (*it)->print(nextPrefix);
+    const char* getTypeName() const override { return "NArrayInitialization"; }
+    std::vector<Node*> children() const override {
+        std::vector<Node*> out;
+        out.push_back(declaration.get());
+        for (auto& e : elements) {
+            out.push_back(e.get());
         }
-//        expression->print(nextPrefix);
+        return out;
     }
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-
-        root["children"].append(arrayName->jsonGen());
-//        root["children"].append(expression->jsonGen());
-        for(auto it=expressions->begin(); it!=expressions->end(); it++){
-            root["children"].append((*it)->jsonGen());
-        }
-        return root;
-    }
-
-    llvm::Value *codeGen(CodeGenContext &context) override ;
-
+    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
-class NArrayAssignment: public NExpression{
-public:
-    shared_ptr<NArrayIndex> arrayIndex;
-    shared_ptr<NExpression>  expression;
-
-    NArrayAssignment(){}
-
-    NArrayAssignment(shared_ptr<NArrayIndex> index, shared_ptr<NExpression>  exp)
-            : arrayIndex(index), expression(exp){
-
-    }
-
-    string getTypeName() const override{
-        return "NArrayAssignment";
-    }
-
-    void print(string prefix) const override{
-
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        arrayIndex->print(nextPrefix);
-        expression->print(nextPrefix);
-    }
-
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-
-        root["children"].append(arrayIndex->jsonGen());
-        root["children"].append(expression->jsonGen());
-
-        return root;
-    }
-
-
-    llvm::Value *codeGen(CodeGenContext &context) override ;
-
-};
-
-class NArrayInitialization: public NStatement{
-public:
-
-    NArrayInitialization(){}
-
-    shared_ptr<NVariableDeclaration> declaration;
-    shared_ptr<ExpressionList> expressionList = make_shared<ExpressionList>();
-
-    NArrayInitialization(shared_ptr<NVariableDeclaration> dec, shared_ptr<ExpressionList> list)
-            : declaration(dec), expressionList(list){
-
-    }
-
-    string getTypeName() const override{
-        return "NArrayInitialization";
-    }
-
-    void print(string prefix) const override{
-
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        declaration->print(nextPrefix);
-        for(auto it=expressionList->begin(); it!=expressionList->end(); it++){
-            (*it)->print(nextPrefix);
-        }
-    }
-
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-
-        root["children"].append(declaration->jsonGen());
-        for(auto it=expressionList->begin(); it!=expressionList->end(); it++)
-            root["children"].append((*it)->jsonGen());
-
-        return root;
-    }
-
-
-    llvm::Value *codeGen(CodeGenContext &context) override ;
-
-};
-
-class NStructAssignment: public NExpression{
-public:
-    shared_ptr<NStructMember> structMember;
-    shared_ptr<NExpression>  expression;
-
-    NStructAssignment(){}
-
-    NStructAssignment(shared_ptr<NStructMember> member, shared_ptr<NExpression>  exp)
-            : structMember(member), expression(exp){
-
-    }
-
-    string getTypeName() const override{
-        return "NStructAssignment";
-    }
-
-    void print(string prefix) const override{
-
-        string nextPrefix = prefix + this->m_PREFIX;
-        cout << prefix << getTypeName() << this->m_DELIM << endl;
-
-        structMember->print(nextPrefix);
-        expression->print(nextPrefix);
-    }
-
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName();
-
-        root["children"].append(structMember->jsonGen());
-        root["children"].append(expression->jsonGen());
-
-        return root;
-    }
-
-    llvm::Value *codeGen(CodeGenContext &context) override;
-
-};
-
-class NLiteral: public NExpression{
-public:
-    string value;
-
-    NLiteral(){}
-
-    NLiteral(const string &str) {
-        value = str.substr(1, str.length()-2);
-    }
-
-    string getTypeName() const override{
-        return "NLiteral";
-    }
-
-    void print(string prefix) const override{
-
-        cout << prefix << getTypeName() << this->m_DELIM << value << endl;
-
-    }
-
-
-    Json::Value jsonGen() const override {
-        Json::Value root;
-        root["name"] = getTypeName() + this->m_DELIM + value;
-
-        return root;
-    }
-
-    llvm::Value *codeGen(CodeGenContext &context) override;
-
-};
-
-
-std::unique_ptr<NExpression> LogError(const char* str);
-
-#endif
+#endif // TINYCOMPILER_ASTNODES_H

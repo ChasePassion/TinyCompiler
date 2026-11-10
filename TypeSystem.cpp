@@ -1,184 +1,177 @@
-//
-// Created by cs on 2017/5/31.
-//
-
 #include "TypeSystem.h"
-#include "CodeGen.h"
-//
-//Value* VarType::getDefaultValue(LLVMContext &context) const {
-//    if( this->name == "int" ){
-//        return ConstantInt::get(Type::getInt32Ty(context), 0, true);
-//    }else if( this->name == "double" ){
-//        return ConstantFP::get(Type::getDoubleTy(context), 0);
-//    }
-//    return nullptr;
-//}
-//
-//Value* VarArrayType::getDefaultValue(LLVMContext &context) const {
-//
-//}
 
-string TypeSystem::llvmTypeToStr(Type *value) {
-    Type::TypeID typeID;
-    if( value )
-        typeID = value->getTypeID();
-    else
-        return "Value is nullptr";
+#include "utils.h"
 
-    switch (typeID){
-        case Type::VoidTyID:
-            return "VoidTyID";
-        case Type::HalfTyID:
-            return "HalfTyID";
-        case Type::FloatTyID:
-            return "FloatTyID";
-        case Type::DoubleTyID:
-            return "DoubleTyID";
-        case Type::IntegerTyID:
-            return "IntegerTyID";
-        case Type::FunctionTyID:
-            return "FunctionTyID";
-        case Type::StructTyID:
-            return "StructTyID";
-        case Type::ArrayTyID:
-            return "ArrayTyID";
-        case Type::PointerTyID:
-            return "PointerTyID";
-        case Type::VectorTyID:
-            return "VectorTyID";
-        default:
-            return "Unknown";
+#include <llvm/IR/Constants.h>
+
+using namespace llvm;
+
+TypeSystem::TypeSystem(LLVMContext& context) : context_(context) {
+    builtins_["int"]    = Type::getInt32Ty(context);
+    builtins_["float"]  = Type::getFloatTy(context);
+    builtins_["double"] = Type::getDoubleTy(context);
+    builtins_["char"]   = Type::getInt8Ty(context);
+    builtins_["bool"]   = Type::getInt1Ty(context);
+    builtins_["string"] = PointerType::getUnqual(Type::getInt8Ty(context));
+    builtins_["void"]   = Type::getVoidTy(context);
+}
+
+Type* TypeSystem::typeByName(const std::string& name) const {
+    auto builtin = builtins_.find(name);
+    if (builtin != builtins_.end()) {
+        return builtin->second;
     }
-}
-
-
-string TypeSystem::llvmTypeToStr(Value *value) {
-    if( value )
-        return llvmTypeToStr(value->getType());
-    else
-        return "Value is nullptr";
-}
-
-TypeSystem::TypeSystem(LLVMContext &context): llvmContext(context){
-    addCast(intTy, floatTy, llvm::CastInst::SIToFP);
-    addCast(intTy, doubleTy, llvm::CastInst::SIToFP);
-    addCast(boolTy, doubleTy, llvm::CastInst::SIToFP);
-    addCast(floatTy, doubleTy, llvm::CastInst::FPExt);
-    addCast(floatTy, intTy, llvm::CastInst::FPToSI);
-    addCast(doubleTy, intTy, llvm::CastInst::FPToSI);
-    addCast(intTy, intTy, llvm::CastInst::SExt);
-}
-
-void TypeSystem::addStructMember(string structName, string memType, string memName) {
-    if( this->_structTypes.find(structName) == this->_structTypes.end() ){
-        LogError("Unknown struct name");
-    }
-    this->_structMembers[structName].push_back(std::make_pair(memType, memName));
-}
-
-void TypeSystem::addStructType(string name, llvm::StructType *type) {
-    this->_structTypes[name] = type;
-    this->_structMembers[name] = std::vector<TypeNamePair>();
-}
-
-Type *TypeSystem::getVarType(const NIdentifier& type) {
-    assert(type.isType);
-    if( type.isArray ){     // array type when allocation, pointer type when pass parameters
-//        return ArrayType::get(getVarType(type.name), type.arraySize->value);
-        return PointerType::get(getVarType(type.name), 0);
-//        PointerType::getUnqual(ArrayType::get(getVarType(type.name), type.arraySize->value));
-    }
-
-    return getVarType(type.name);
-
-    return 0;
-}
-
-
-
-Value* TypeSystem::getDefaultValue(string typeStr, LLVMContext &context) {
-    Type* type = this->getVarType(typeStr);
-    if( type == this->intTy ){
-        return ConstantInt::get(type, 0, true);
-    }else if( type == this->doubleTy || type == this->floatTy ){
-        return ConstantFP::get(type, 0);
+    auto structIt = structs_.find(name);
+    if (structIt != structs_.end()) {
+        return structIt->second;
     }
     return nullptr;
 }
 
-void TypeSystem::addCast(Type *from, Type *to, CastInst::CastOps op) {
-    if( _castTable.find(from) == _castTable.end() ){
-        _castTable[from] = std::map<Type*, CastInst::CastOps>();
+Type* TypeSystem::llvmType(const NTypeRef& type) const {
+    Type* base = typeByName(type.name);
+    if (!base) {
+        return nullptr;
     }
-    _castTable[from][to] = op;
+    if (type.isArray()) {
+        // 数组在表达式里退化成指向首元素的指针
+        return PointerType::getUnqual(base);
+    }
+    return base;
 }
 
-Value* TypeSystem::cast(Value *value, Type *type, BasicBlock *block) {
-    Type* from = value->getType();
-    if( from == type )
-        return value;
-    if( _castTable.find(from) == _castTable.end() ){
-        LogError("Type has no cast");
-        return value;
+Type* TypeSystem::arrayStorageType(const NTypeRef& type) const {
+    if (!type.isArray()) {
+        return nullptr;
     }
-    if( _castTable[from].find(type) == _castTable[from].end() ){
-        string error = "Unable to cast from ";
-        error += llvmTypeToStr(from) + " to " + llvmTypeToStr(type);
-        LogError(error.c_str());
-        return value;
+    Type* base = typeByName(type.name);
+    if (!base) {
+        return nullptr;
     }
-
-    return CastInst::Create(_castTable[from][type], value, type, "cast", block);
+    return ArrayType::get(base, type.elementCount());
 }
 
-bool TypeSystem::isStruct(string typeStr) const {
-    return this->_structTypes.find(typeStr) != this->_structTypes.end();
+bool TypeSystem::isStruct(const std::string& name) const {
+    return structs_.find(name) != structs_.end();
 }
 
-long TypeSystem::getStructMemberIndex(string structName, string memberName) {
-    if( this->_structTypes.find(structName) == this->_structTypes.end() ){
-        LogError("Unknown struct name");
-        return 0;
+void TypeSystem::addStructType(const std::string& name, StructType* type) {
+    structs_[name] = type;
+    structMembers_[name].clear();
+}
+
+void TypeSystem::addStructMember(const std::string& structName,
+                                  const std::string& memberType,
+                                  const std::string& memberName) {
+    structMembers_[structName].push_back(std::make_pair(memberType, memberName));
+}
+
+long TypeSystem::getStructMemberIndex(const std::string& structName,
+                                       const std::string& memberName) const {
+    auto it = structMembers_.find(structName);
+    if (it == structMembers_.end()) {
+        return -1;
     }
-    auto& members = this->_structMembers[structName];
-    for(auto it=members.begin(); it!=members.end(); it++){
-        if( it->second == memberName ){
-            return std::distance(members.begin(), it);
+    const auto& members = it->second;
+    for (size_t i = 0; i < members.size(); ++i) {
+        if (members[i].second == memberName) {
+            return static_cast<long>(i);
         }
     }
-
-    LogError("Unknown struct member");
-
-    return 0;
+    return -1;
 }
 
-Type *TypeSystem::getVarType(string typeStr) {
-
-    if( typeStr.compare("int") == 0 ){
-        return this->intTy;
+Type* TypeSystem::structMemberType(const std::string& structName,
+                                    const std::string& memberName) const {
+    auto it = structMembers_.find(structName);
+    if (it == structMembers_.end()) {
+        return nullptr;
     }
-    if( typeStr.compare("float") == 0 ){
-        return this->floatTy;
+    for (const auto& member : it->second) {
+        if (member.second == memberName) {
+            return typeByName(member.first);
+        }
     }
-    if( typeStr.compare("double") == 0 ){
-        return this->doubleTy;
-    }
-    if( typeStr.compare("bool") == 0 ){
-        return this->boolTy;
-    }
-    if( typeStr.compare("char") == 0 ){
-        return this->charTy;
-    }
-    if( typeStr.compare("void") == 0 ){
-        return this->voidTy;
-    }
-    if( typeStr.compare("string") == 0 ){
-        return this->stringTy;
-    }
-
-    if( this->_structTypes.find(typeStr) != this->_structTypes.end() )
-        return this->_structTypes[typeStr];
-
     return nullptr;
 }
 
+Value* TypeSystem::cast(Value* value, Type* targetType, IRBuilder<>& builder) {
+    if (!value || !targetType) {
+        return value;
+    }
+    Type* from = value->getType();
+    if (from == targetType) {
+        return value;
+    }
+
+    // 整数 -> 整数
+    if (from->isIntegerTy() && targetType->isIntegerTy()) {
+        if (targetType->isIntegerTy(1)) {
+            // 转成 bool：非 0 即为真。
+            // 注意不能直接截断成 1 位，那样 2 会变成 0（假）。
+            return builder.CreateICmpNE(value, ConstantInt::get(from, 0), "tobool");
+        }
+        unsigned fromBits = from->getIntegerBitWidth();
+        unsigned toBits = targetType->getIntegerBitWidth();
+        if (fromBits > toBits) {
+            return builder.CreateTrunc(value, targetType, "cast");
+        }
+        return builder.CreateSExt(value, targetType, "cast");
+    }
+
+    // 整数 -> 浮点
+    if (from->isIntegerTy() && targetType->isFloatingPointTy()) {
+        return builder.CreateSIToFP(value, targetType, "cast");
+    }
+
+    // 浮点 -> 整数
+    if (from->isFloatingPointTy() && targetType->isIntegerTy()) {
+        return builder.CreateFPToSI(value, targetType, "cast");
+    }
+
+    // 浮点 -> 浮点
+    if (from->isFloatingPointTy() && targetType->isFloatingPointTy()) {
+        bool fromIsDouble = (from == builtins_["double"]);
+        bool toIsDouble = (targetType == builtins_["double"]);
+        if (fromIsDouble && !toIsDouble) {
+            return builder.CreateFPTrunc(value, targetType, "cast");
+        }
+        if (!fromIsDouble && toIsDouble) {
+            return builder.CreateFPExt(value, targetType, "cast");
+        }
+        return value;
+    }
+
+    LogError("无法把 " + DescribeType(from) + " 转换成 " + DescribeType(targetType));
+    return value;
+}
+
+Constant* TypeSystem::defaultValue(Type* type) {
+    if (!type) {
+        return nullptr;
+    }
+    if (type->isIntegerTy()) {
+        return ConstantInt::get(type, 0);
+    }
+    if (type->isFloatingPointTy()) {
+        return ConstantFP::get(type, 0.0);
+    }
+    return nullptr;
+}
+
+std::string DescribeType(Type* type) {
+    if (!type) {
+        return "<空>";
+    }
+    switch (type->getTypeID()) {
+    case Type::VoidTyID:    return "void";
+    case Type::HalfTyID:    return "half";
+    case Type::FloatTyID:   return "float";
+    case Type::DoubleTyID:  return "double";
+    case Type::IntegerTyID: return "int" + std::to_string(type->getIntegerBitWidth());
+    case Type::PointerTyID: return "pointer";
+    case Type::ArrayTyID:   return "array";
+    case Type::StructTyID:  return type->getStructName().str();
+    default:                return "unknown";
+    }
+}

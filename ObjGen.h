@@ -1,10 +1,11 @@
-//
-// Created by cs on 2017/5/30.
-//
-
 #ifndef TINYCOMPILER_OBJGEN_H
 #define TINYCOMPILER_OBJGEN_H
 
-void ObjGen(CodeGenContext & context, const string& filename = "output.o");
+#include <string>
 
-#endif //TINYCOMPILER_OBJGEN_H
+class CodeGenContext;
+
+// 把已经生成的 LLVM IR 翻译成目标文件（.o / .obj）
+void ObjGen(CodeGenContext& context, const std::string& filename = "output.o");
+
+#endif // TINYCOMPILER_OBJGEN_H
