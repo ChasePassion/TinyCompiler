@@ -3,12 +3,16 @@
 #
 #   cmake -B build -S . && cmake --build build
 #
-# 需要先准备好 LLVM（含 C++ 头文件）、flex 和 bison。
+# Windows 上更推荐用 build.ps1（会自动加载 MSVC 环境并找到 LLVM / flex / bison）：
+#
+#   pwsh -File build.ps1
+#
+# Linux 上需要自己保证 LLVM（含 C++ 头文件）、flex、bison 都在。
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
 
-.PHONY: all configure build test clean run
+.PHONY: all configure build test run clean
 
 all: build
 
@@ -18,13 +22,14 @@ configure:
 build: configure
 	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE)
 
-# 用 tests/ 下的用例跑一遍
+# 跑测试用例：生成 IR -> 生成目标文件 -> 链接 -> 运行 -> 比对输出
 test: build
-	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --target test
+	pwsh -File tests/run_tests.ps1 -BuildDir $(BUILD_DIR)
 
+# 用 tests/testBasic.input 编译一遍，看看生成的 IR
 run: build
 	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --target run
 
 clean:
 	cmake --build $(BUILD_DIR) --config $(BUILD_TYPE) --target clean
-	rm -rf $(BUILD_DIR)
+	cmake -E rm -rf $(BUILD_DIR)

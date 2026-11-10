@@ -134,21 +134,55 @@ clang output.o testmain.cpp -o test
 ./test
 ```
 
+也可以和普通的 C++ 代码链接（`tests/link_demo` 那个用例就是这么做的）：
+
+```c
+/* link_demo.input —— TinyCompiler 编译的部分，没有 main */
+int add(int a, int b){
+    return a + b
+}
+```
+
+```cpp
+/* link_demo_main.cpp —— 普通的 C++ 代码 */
+#include <cstdio>
+
+// TinyCompiler 的函数用 C 调用约定，C++ 里要用 extern "C" 声明
+extern "C" int add(int a, int b);
+
+int main() {
+    printf("add(3, 4) = %d\n", add(3, 4));
+    return 0;
+}
+```
+
 ### 1.4 跑测试
 
 ```powershell
 pwsh -File tests/run_tests.ps1 -BuildDir build
 ```
 
-每个用例包含三个文件：
+每个用例包含下面这些文件：
 
 | 文件 | 作用 |
 | --- | --- |
 | `tests/xxx.input` | 测试用的源代码 |
 | `tests/xxx.expected` | 程序的预期输出（用来自动比对） |
 | `tests/xxx.stdin` | 喂给程序的输入（可选） |
+| `tests/xxx_main.cpp` | 额外的 C++ 入口（可选，用于和 C++ 代码链接的场景） |
 
 脚本会依次完成「生成 IR → 生成目标文件 → 链接成 exe → 运行 → 比对输出」。
+
+目前的用例：
+
+| 用例 | 覆盖的东西 |
+| --- | --- |
+| `testBasic` | 函数定义与调用、if/else 链、for 循环、变参外部函数 |
+| `testArray` | 一维/二维数组、数组初始化、数组下标 |
+| `testStruct` | 结构体定义、成员访问与赋值、scanf 读字符串 |
+| `testExtern` | 外部函数声明、浮点格式化输出 |
+| `testBugfix` | 专门锁住那些曾经出过问题的行为（见第 6 节） |
+| `link_demo` | TinyCompiler 编译的函数和普通 C++ 代码链接在一起 |
 
 ---
 
