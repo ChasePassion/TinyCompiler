@@ -212,7 +212,9 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
             return nullptr;
         }
         Symbol* temp = symbols_.newTemporary();
-        temp->llvmType = types_.structMemberType(variable->typeName, n->member->name);
+        // 成员的类型从结构体类型里取
+        auto* structType = llvm::cast<llvm::StructType>(types_.typeByName(variable->typeName));
+        temp->llvmType = structType->getStructElementType(index);
         temp->typeName = variable->typeName;
         emit(QuadOp::FieldRef, variable, nullptr, temp, -1, static_cast<int>(index));
         return temp;
@@ -491,7 +493,6 @@ void IntermGen::translateFunction(NFunctionDeclaration& node) {
         symbol->typeName = parameter->type->name;
         symbol->llvmType = types_.typeByName(parameter->type->name);
         symbol->dims = parameter->type->dims;
-        symbol->isFuncArg = true;
         code.params.push_back(symbol);
     }
 

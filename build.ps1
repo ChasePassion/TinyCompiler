@@ -114,9 +114,27 @@ if ($nonAscii) {
 }
 
 # ---------------------------------------------------------------- cmake
-if ($Clean -and (Test-Path $BuildDir)) {
+# MSBuild 在这个环境里没有记录头文件的依赖（CL.read.1.tlog 里只有 .cpp 没有 .h），
+# 改了头文件不会触发重编，会用旧的结构体布局继续编，出来的程序行为诡异。
+# 所以这里自己比较一下所有源文件（含头文件、语法文件）和可执行文件的时间戳：
+# 只要有源文件更新了，就整体重建。
+function Test-SourceChanged([string]$buildDir, [string]$buildType) {
+    $exe = Join-Path $buildDir "$buildType\TinyCompiler.exe"
+    if (-not (Test-Path $exe)) { return $true }
+    $exeTime = (Get-Item $exe).LastWriteTime
+    $newest = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Extension -in @('.cpp', '.h', '.y', '.l') } |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -eq $newest) { return $false }
+    return $newest.LastWriteTime -gt $exeTime
+}
+
+if ($Clean -or (Test-SourceChanged $BuildDir $BuildType)) {
+    if (-not $Clean) {
+        Write-Host "源文件有改动，整体重建（MSBuild 不跟踪头文件依赖）"
+    }
     Write-Host "清理 $BuildDir"
-    Remove-Item -Recurse -Force $BuildDir
+    Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
 }
 
 $configureArgs = @(

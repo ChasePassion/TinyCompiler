@@ -53,15 +53,6 @@ public:
     // 外部函数按可变参数处理（printf 这类）
     bool isVariadic = false;
 
-    // 存储位置：标量是栈上的槽位地址；数组是首元素的指针
-    llvm::Value* addr = nullptr;
-
-    // 是否是函数形参
-    bool isFuncArg = false;
-
-    // 临时变量的编号（教材里的 T1、T2）
-    int tempIndex = 0;
-
     // 别名：公共子表达式被合并后，这个符号指向原来那个符号
     Symbol* alias = nullptr;
 
@@ -76,7 +67,6 @@ public:
     // 进入 / 退出一层作用域
     void pushScope();
     void popScope();
-    int scopeDepth() const { return static_cast<int>(scopes_.size()); }
 
     // 在当前作用域里登记一个名字。已经存在同名的话返回原有的表项。
     Symbol* define(const std::string& name, SymbolKind kind);
@@ -86,9 +76,6 @@ public:
 
     // 查找名字：从最内层作用域往外找，符合 C 的遮蔽规则
     Symbol* lookup(const std::string& name);
-
-    // 名字是否已经在当前作用域里出现过（用来检查重复说明）
-    bool isDefinedHere(const std::string& name) const;
 
 private:
     // 每一层作用域一张表：名字 -> 表项

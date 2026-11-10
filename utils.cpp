@@ -17,10 +17,6 @@ int ErrorCount() {
     return g_errorCount;
 }
 
-void ResetErrorCount() {
-    g_errorCount = 0;
-}
-
 std::string JsonEscape(const std::string& s) {    std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {

@@ -70,15 +70,6 @@ public:
     }
 
     bool isArray() const { return !dims.empty(); }
-
-    // 数组元素总数。多维数组在内存里展平成一维，和 C 的行主序布局一致。
-    uint64_t elementCount() const {
-        uint64_t n = 1;
-        for (uint64_t d : dims) {
-            n *= d;
-        }
-        return n;
-    }
 };
 
 // ---------------------------------------------------------------------------

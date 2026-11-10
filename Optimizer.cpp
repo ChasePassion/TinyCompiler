@@ -2,10 +2,9 @@
 
 #include "utils.h"
 
+#include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <map>
-#include <set>
 #include <sstream>
 
 Optimizer::Optimizer(SymbolTable& symbols) : symbols_(symbols) {}
@@ -17,7 +16,7 @@ void Optimizer::optimize(IntermediateCode& code) {
 }
 
 void Optimizer::optimizeFunction(FunctionCode& function) {
-    // 反复做，直到不再有变化（删除一条四元式可能让别的四元式也能折叠）
+    // 反复做，直到不再有变化（删掉一条四元式可能让别的四元式也能折叠）
     bool changed = true;
     int rounds = 0;
     while (changed && rounds < 10) {
@@ -69,7 +68,7 @@ double Optimizer::compute(QuadOp op, const Symbol* left, const Symbol* right) {
     case QuadOp::Shr: return isFloat ? 0 : static_cast<double>(
         static_cast<int64_t>(a) >> static_cast<int64_t>(b));
     // 比较运算的结果是 0 或 1
-    case QuadOp::Lt: return isFloat ? (a < b ? 1 : 0) : (a < b ? 1 : 0);
+    case QuadOp::Lt: return (a < b) ? 1 : 0;
     case QuadOp::Le: return (a <= b) ? 1 : 0;
     case QuadOp::Gt: return (a > b) ? 1 : 0;
     case QuadOp::Ge: return (a >= b) ? 1 : 0;
@@ -81,27 +80,26 @@ double Optimizer::compute(QuadOp op, const Symbol* left, const Symbol* right) {
 
 bool Optimizer::foldConstants(FunctionCode& function) {
     bool changed = false;
-    std::vector<Quadruple> kept;
-    kept.reserve(function.quads.size());
+    std::vector<Quadruple>& quads = function.quads;
 
-    for (Quadruple& quad : function.quads) {
-        bool foldable = isComputable(quad.op) && quad.arg1 && quad.arg2 &&
-                        quad.arg1->hasConstant && quad.arg2->hasConstant && quad.result;
-        if (foldable) {
-            // 两个操作数都是编译期已知的值，直接算出结果。
-            // 结果写进符号表，后面用到这个符号的地方就都知道它的值了
-            // —— 这就是常量传播。
-            double value = compute(quad.op, quad.arg1, quad.arg2);
-            quad.result->hasConstant = true;
-            quad.result->constantIsFloat = quad.result->llvmType &&
-                                           quad.result->llvmType->isFloatingPointTy();
-            quad.result->constantValue = value;
-            changed = true;
-            continue;   // 这条四元式不用了
+    auto end = std::remove_if(quads.begin(), quads.end(), [&](Quadruple& quad) {
+        if (!isComputable(quad.op) || !quad.arg1 || !quad.arg2 || !quad.result) {
+            return false;
         }
-        kept.push_back(quad);
-    }
-    function.quads.swap(kept);
+        if (!quad.arg1->hasConstant || !quad.arg2->hasConstant) {
+            return false;
+        }
+        // 两个操作数都是编译期已知的值，直接算出结果。
+        // 结果写进符号表，后面用到这个符号的地方就都知道它的值了
+        // —— 这就是常量传播。
+        quad.result->hasConstant = true;
+        quad.result->constantIsFloat = quad.result->llvmType &&
+                                      quad.result->llvmType->isFloatingPointTy();
+        quad.result->constantValue = compute(quad.op, quad.arg1, quad.arg2);
+        changed = true;
+        return true;   // 这条四元式不用了
+    });
+    quads.erase(end, quads.end());
     return changed;
 }
 
@@ -113,36 +111,32 @@ bool Optimizer::removeCommonSubexpressions(FunctionCode& function) {
     bool changed = false;
     // 每个基本块里，已经算过的表达式 -> 它的结果符号
     std::map<std::string, Symbol*> computed;
+    std::vector<Quadruple>& quads = function.quads;
 
-    std::vector<Quadruple> kept;
-    kept.reserve(function.quads.size());
-
-    for (Quadruple& quad : function.quads) {
+    auto end = std::remove_if(quads.begin(), quads.end(), [&](Quadruple& quad) {
         // 标号意味着新基本块开始，公共子表达式不能跨基本块
         if (quad.op == QuadOp::Label) {
             computed.clear();
-            kept.push_back(quad);
-            continue;
+            return false;
         }
-
-        bool reuseable = isComputable(quad.op) && quad.arg1 && quad.arg2 && quad.result;
-        if (reuseable) {
-            // key 用符号的地址而不是名字：不同作用域里可能有同名的变量，
-            // 用名字做 key 会把它们误判成公共子表达式
-            std::ostringstream key;
-            key << static_cast<int>(quad.op) << " " << quad.arg1 << " " << quad.arg2;
-            auto it = computed.find(key.str());
-            if (it != computed.end()) {
-                // 这个表达式前面算过了，结果直接用前面那个
-                quad.result->alias = it->second;
-                changed = true;
-                continue;   // 这条四元式不用了
-            }
-            computed[key.str()] = quad.result;
+        if (!isComputable(quad.op) || !quad.arg1 || !quad.arg2 || !quad.result) {
+            return false;
         }
-        kept.push_back(quad);
-    }
-    function.quads.swap(kept);
+        // key 用符号的地址而不是名字：不同作用域里可能有同名的变量，
+        // 用名字做 key 会把它们误判成公共子表达式
+        std::ostringstream key;
+        key << static_cast<int>(quad.op) << " " << quad.arg1 << " " << quad.arg2;
+        auto found = computed.find(key.str());
+        if (found != computed.end()) {
+            // 这个表达式前面算过了，结果直接用前面那个
+            quad.result->alias = found->second;
+            changed = true;
+            return true;   // 这条四元式不用了
+        }
+        computed[key.str()] = quad.result;
+        return false;
+    });
+    quads.erase(end, quads.end());
     return changed;
 }
 
@@ -163,28 +157,20 @@ bool Optimizer::removeDeadCode(FunctionCode& function) {
     }
 
     bool changed = false;
-    std::vector<Quadruple> kept;
-    kept.reserve(function.quads.size());
+    std::vector<Quadruple>& quads = function.quads;
 
-    for (Quadruple& quad : function.quads) {
+    auto end = std::remove_if(quads.begin(), quads.end(), [&](Quadruple& quad) {
         // 纯计算的四元式，如果结果没人用就可以删掉
-        bool pure = quad.op == QuadOp::Add || quad.op == QuadOp::Sub ||
-                    quad.op == QuadOp::Mul || quad.op == QuadOp::Div ||
-                    quad.op == QuadOp::Mod || quad.op == QuadOp::BitAnd ||
-                    quad.op == QuadOp::BitOr || quad.op == QuadOp::BitXor ||
-                    quad.op == QuadOp::Shl || quad.op == QuadOp::Shr ||
-                    quad.op == QuadOp::Lt || quad.op == QuadOp::Le ||
-                    quad.op == QuadOp::Gt || quad.op == QuadOp::Ge ||
-                    quad.op == QuadOp::Eq || quad.op == QuadOp::Ne;
-        if (pure && quad.result) {
-            auto it = useCount.find(quad.result);
-            if (it != useCount.end() && it->second == 0) {
-                changed = true;
-                continue;   // 没人用它的结果，删掉
-            }
+        if (!isComputable(quad.op) || !quad.result) {
+            return false;
         }
-        kept.push_back(quad);
-    }
-    function.quads.swap(kept);
+        auto found = useCount.find(quad.result);
+        if (found != useCount.end() && found->second == 0) {
+            changed = true;
+            return true;
+        }
+        return false;
+    });
+    quads.erase(end, quads.end());
     return changed;
 }

@@ -91,6 +91,12 @@ Windows：
 pwsh -File build.ps1
 ```
 
+> **注意**：MSBuild 在中文 Windows 上没有记录头文件的依赖
+> （`CL.read.1.tlog` 里只有 `.cpp` 没有 `.h`），改了头文件不会触发重编，
+> 会拿旧的结构体布局继续编，出来的程序行为诡异。
+> `build.ps1` 因此会自己比较所有源文件（含头文件）和可执行文件的时间戳，
+> 只要有改动就整体重建。用 `pwsh -File build.ps1 -Clean` 可以强制重建。
+
 `build.ps1` 会自动加载 Visual Studio 的编译环境、找到 LLVM / flex / bison，
 然后调用 CMake。LLVM 目录默认会自动探测（`E:\LLVM-full`、`C:\LLVM-full`、
 `C:\Program Files\LLVM` 等），也可以显式指定：

@@ -32,9 +32,7 @@ Symbol* SymbolTable::define(const std::string& name, SymbolKind kind) {
 
 Symbol* SymbolTable::newTemporary(SymbolKind kind) {
     std::string name = "T" + std::to_string(nextTempIndex_++);
-    Symbol* symbol = define(name, kind);
-    symbol->tempIndex = nextTempIndex_ - 1;
-    return symbol;
+    return define(name, kind);
 }
 
 Symbol* SymbolTable::lookup(const std::string& name) {
@@ -45,9 +43,4 @@ Symbol* SymbolTable::lookup(const std::string& name) {
         }
     }
     return nullptr;
-}
-
-bool SymbolTable::isDefinedHere(const std::string& name) const {
-    auto it = scopes_.back().find(name);
-    return it != scopes_.back().end();
 }

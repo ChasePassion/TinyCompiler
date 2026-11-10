@@ -28,33 +28,6 @@ Type* TypeSystem::typeByName(const std::string& name) const {
     return nullptr;
 }
 
-Type* TypeSystem::llvmType(const NTypeRef& type) const {
-    Type* base = typeByName(type.name);
-    if (!base) {
-        return nullptr;
-    }
-    if (type.isArray()) {
-        // 数组在表达式里退化成指向首元素的指针
-        return PointerType::getUnqual(base);
-    }
-    return base;
-}
-
-Type* TypeSystem::arrayStorageType(const NTypeRef& type) const {
-    if (!type.isArray()) {
-        return nullptr;
-    }
-    Type* base = typeByName(type.name);
-    if (!base) {
-        return nullptr;
-    }
-    return ArrayType::get(base, type.elementCount());
-}
-
-bool TypeSystem::isStruct(const std::string& name) const {
-    return structs_.find(name) != structs_.end();
-}
-
 void TypeSystem::addStructType(const std::string& name, StructType* type) {
     structs_[name] = type;
     structMembers_[name].clear();
@@ -79,20 +52,6 @@ long TypeSystem::getStructMemberIndex(const std::string& structName,
         }
     }
     return -1;
-}
-
-Type* TypeSystem::structMemberType(const std::string& structName,
-                                    const std::string& memberName) const {
-    auto it = structMembers_.find(structName);
-    if (it == structMembers_.end()) {
-        return nullptr;
-    }
-    for (const auto& member : it->second) {
-        if (member.second == memberName) {
-            return typeByName(member.first);
-        }
-    }
-    return nullptr;
 }
 
 Value* TypeSystem::cast(Value* value, Type* targetType, IRBuilder<>& builder) {
@@ -164,18 +123,6 @@ Type* TypeSystem::unify(Type* left, Type* right) const {
         return Type::getIntNTy(context_, width);
     }
     return left;
-}
-
-Constant* TypeSystem::defaultValue(Type* type) {    if (!type) {
-        return nullptr;
-    }
-    if (type->isIntegerTy()) {
-        return ConstantInt::get(type, 0);
-    }
-    if (type->isFloatingPointTy()) {
-        return ConstantFP::get(type, 0.0);
-    }
-    return nullptr;
 }
 
 std::string DescribeType(Type* type) {
