@@ -1,14 +1,12 @@
 #ifndef TINYCOMPILER_ASTNODES_H
 #define TINYCOMPILER_ASTNODES_H
 
-#include <llvm/IR/Value.h>
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-class CodeGenContext;
 
 // 二元运算符。用枚举而不是 bison 的 token 编号，好处是语法树节点不依赖
 // 语法分析器生成的头文件，AST 可以独立地打印、序列化、单元测试。
@@ -29,7 +27,9 @@ std::string OpName(BinOp op);
 //
 //   label()         节点在树上的显示文本，必须实现
 //   children()      子节点列表，可选，默认空
-//   codeGen()       生成 LLVM IR，可选，默认什么都不生成
+// ---------------------------------------------------------------------------
+// 抽象语法树只描述语法，不涉及语义。翻译成中间代码是 IntermGen 的事
+// （教材第 7 章的语法制导翻译），所以这里不依赖 LLVM。
 // ---------------------------------------------------------------------------
 class Node {
 public:
@@ -37,7 +37,6 @@ public:
 
     virtual std::string label() const = 0;
     virtual std::vector<Node*> children() const { return {}; }
-    virtual llvm::Value* codeGen(CodeGenContext& context) { (void)context; return nullptr; }
 
     // 按 prefix 缩进打印整棵子树
     void print(const std::string& prefix = "") const;
@@ -101,7 +100,6 @@ public:
     std::string label() const override {
         return "NInteger:" + std::to_string(value);
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 浮点字面量
@@ -115,7 +113,6 @@ public:
     std::string label() const override {
         return "NDouble:" + std::to_string(value);
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 字符串字面量
@@ -129,7 +126,6 @@ public:
     std::string label() const override {
         return "NLiteral:" + value;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 标识符（变量名 / 函数名 / 结构体成员名）
@@ -143,7 +139,6 @@ public:
     std::string label() const override {
         return "NIdentifier:" + name;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 二元运算
@@ -163,7 +158,6 @@ public:
     std::vector<Node*> children() const override {
         return {lhs.get(), rhs.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 赋值 a = b
@@ -180,7 +174,6 @@ public:
     std::vector<Node*> children() const override {
         return {lhs.get(), rhs.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 函数调用
@@ -202,7 +195,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 结构体成员访问 p.x
@@ -219,7 +211,6 @@ public:
     std::vector<Node*> children() const override {
         return {id.get(), member.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 数组元素 arr[i][j]
@@ -241,7 +232,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 数组元素赋值 arr[i] = v
@@ -258,7 +248,6 @@ public:
     std::vector<Node*> children() const override {
         return {index.get(), expression.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 结构体成员赋值 p.x = v
@@ -275,7 +264,6 @@ public:
     std::vector<Node*> children() const override {
         return {member.get(), expression.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // ---------------------------------------------------------------------------
@@ -303,7 +291,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 表达式语句
@@ -319,7 +306,6 @@ public:
     std::vector<Node*> children() const override {
         return {expression.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 变量声明 int a = 1
@@ -342,7 +328,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 函数声明 / 定义
@@ -372,7 +357,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 结构体声明 struct Point { ... }
@@ -395,7 +379,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // return 表达式
@@ -411,7 +394,6 @@ public:
     std::vector<Node*> children() const override {
         return {expression.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // if / else
@@ -434,7 +416,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // for / while（while 会被改写成没有 initial 和 increment 的 for）
@@ -466,7 +447,6 @@ public:
         out.push_back(body.get());
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 // 数组初始化 int[3] a = [1, 2, 3]
@@ -489,7 +469,6 @@ public:
         }
         return out;
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 
 #endif // TINYCOMPILER_ASTNODES_H

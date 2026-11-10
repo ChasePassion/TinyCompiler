@@ -146,8 +146,27 @@ Value* TypeSystem::cast(Value* value, Type* targetType, IRBuilder<>& builder) {
     return value;
 }
 
-Constant* TypeSystem::defaultValue(Type* type) {
-    if (!type) {
+Type* TypeSystem::unify(Type* left, Type* right) const {
+    if (!left || !right) {
+        return left ? left : right;
+    }
+    if (left == right) {
+        return left;
+    }
+    if (left->isFloatingPointTy() || right->isFloatingPointTy()) {
+        return Type::getDoubleTy(context_);
+    }
+    if (left->isIntegerTy() && right->isIntegerTy()) {
+        unsigned width = std::max(left->getIntegerBitWidth(), right->getIntegerBitWidth());
+        if (width < 32) {
+            width = 32;
+        }
+        return Type::getIntNTy(context_, width);
+    }
+    return left;
+}
+
+Constant* TypeSystem::defaultValue(Type* type) {    if (!type) {
         return nullptr;
     }
     if (type->isIntegerTy()) {

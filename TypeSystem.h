@@ -23,6 +23,9 @@ class TypeSystem {
 public:
     explicit TypeSystem(llvm::LLVMContext& context);
 
+    // 上下文（创建结构体类型时要用）
+    llvm::LLVMContext& context() const { return context_; }
+
     // 按类型名查找 LLVM 类型（内置类型或结构体），找不到返回 nullptr
     llvm::Type* typeByName(const std::string& name) const;
 
@@ -49,6 +52,11 @@ public:
 
     // 类型的默认值：整数 0，浮点 0.0
     llvm::Constant* defaultValue(llvm::Type* type);
+
+    // 两个类型的统一（教材 7.7 类型检查）：
+    //   只要有一边是浮点，统一成 double
+    //   两边都是整数时，统一到较宽的那个（至少 32 位）
+    llvm::Type* unify(llvm::Type* left, llvm::Type* right) const;
 
 private:
     llvm::LLVMContext& context_;

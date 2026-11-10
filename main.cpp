@@ -7,8 +7,11 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include "ASTNodes.h"
-#include "CodeGen.h"
+#include "Backend.h"
+#include "IntermGen.h"
 #include "ObjGen.h"
+#include "Optimizer.h"
+#include "Quadruple.h"
 #include "utils.h"
 
 // 语法分析器建立的语法树根节点
@@ -29,17 +32,28 @@ void PrintUsage(const char* program) {
         << "  --ast        同时在屏幕上打印语法树\n"
         << "  --ast-json <文件>\n"
         << "                把语法树以 JSON 格式写到文件，默认 visualization/A_tree.json\n"
+        << "  --dump-ir    打印中间代码（四元式）\n"
         << "  -h, --help   显示这个帮助信息\n";
 }
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// 教材第 1 章图 1.1「编译程序总框」：
+//
+//   源程序 → 词法分析 → 语法分析 → 语义分析与中间代码产生 → 优化 → 目标代码
+//
+//   词法分析在 token.l，语法分析在 grammar.y，
+//   语义分析与中间代码产生在 IntermGen.cpp，优化在 Optimizer.cpp，
+//   目标代码生成在 Backend.cpp 和 ObjGen.cpp。
+// ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
     std::string outputFile = "output.o";
     std::string jsonFile;
     std::string inputFile;
     bool printAst = false;
     bool emitIROnly = false;
+    bool dumpIntermediate = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string argument = argv[i];
@@ -51,6 +65,8 @@ int main(int argc, char** argv) {
             printAst = true;
         } else if (argument == "--ast-json" && i + 1 < argc) {
             jsonFile = argv[++i];
+        } else if (argument == "--dump-ir") {
+            dumpIntermediate = true;
         } else if (argument == "-h" || argument == "--help") {
             PrintUsage(argv[0]);
             return 0;
@@ -71,6 +87,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ---------------------------------------------------------- 语法分析
     if (yyparse() != 0 || programBlock == nullptr) {
         fprintf(stderr, "error: 语法分析失败\n");
         return 1;
@@ -94,9 +111,27 @@ int main(int argc, char** argv) {
         programBlock->print("--");
     }
 
-    // 生成 LLVM IR，再翻译成目标文件
+    // --------------------------------- 语义分析和中间代码产生（教材第 7 章）
     CodeGenContext context;
-    context.generateCode(*programBlock);
+    IntermGen generator(context.symbols, context.typeSystem);
+    IntermediateCode intermediate = generator.generate(*programBlock);
+
+    if (dumpIntermediate) {
+        intermediate.dump();
+    }
+
+    if (ErrorCount() > 0) {
+        fprintf(stderr, "error: 语义分析阶段有 %d 处错误\n", ErrorCount());
+        return 1;
+    }
+
+    // ------------------------------------------------ 中间代码优化（教材第 10 章）
+    Optimizer optimizer(context.symbols);
+    optimizer.optimize(intermediate);
+
+    // --------------------------------------------- 目标代码生成（教材图 1.1 末端）
+    Backend backend(context);
+    backend.generate(intermediate);
 
     if (ErrorCount() > 0) {
         fprintf(stderr, "error: 编译过程中有 %d 处错误\n", ErrorCount());

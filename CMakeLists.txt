@@ -36,11 +36,24 @@ set(BISON_OUTPUT ${GENERATED_DIR}/grammar.cpp)
 flex_target(Token ${CMAKE_CURRENT_SOURCE_DIR}/token.l ${GENERATED_DIR}/token.cpp)
 set(FLEX_OUTPUT ${GENERATED_DIR}/token.cpp)
 
+# 源码按教材第 1 章图 1.1 的模块划分组织：
+#   ASTNodes      抽象语法树（第 6 章）
+#   IntermGen     语义分析和中间代码产生（第 7 章）
+#   Quadruple     中间代码：四元式（第 7 章 7.1.3）
+#   TypeSystem    类型系统（第 7 章 7.7）
+#   SymbolTable   符号表（第 8 章）
+#   Optimizer     中间代码优化（第 10 章）
+#   Backend       目标代码生成（四元式 -> LLVM IR）
+#   ObjGen        目标文件生成（LLVM IR -> .o）
 add_executable(TinyCompiler
     ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ASTNodes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/CodeGen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/IntermGen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Quadruple.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TypeSystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/SymbolTable.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ObjGen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
     ${BISON_OUTPUT}

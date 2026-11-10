@@ -123,6 +123,9 @@ cat test.c | ./build/TinyCompiler -o output.o
 # 只生成 LLVM IR，不生成目标文件
 ./build/TinyCompiler -S -o output.ll test.c
 
+# 打印中间代码（四元式），看看语义分析的结果
+./build/TinyCompiler --dump-ir -S -o output.ll test.c
+
 # 顺便把语法树打印到屏幕、并导出成 JSON
 ./build/TinyCompiler --ast --ast-json A_tree.json test.c
 ```
@@ -189,35 +192,75 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 
 ## 2. 源码结构
 
+整个项目按教材《程序设计语言编译原理》（陈火旺等）的**模块划分**组织，
+每个源文件对应教材的一个阶段：
+
 ```
 TinyCompiler/
-├── ASTNodes.h / .cpp    抽象语法树的节点定义，以及统一的打印 / JSON 导出
-├── CodeGen.h / .cpp     语义分析和中间代码生成（AST → LLVM IR）
-├── TypeSystem.h / .cpp  类型系统：类型名 ↔ LLVM 类型，隐式转换规则
-├── ObjGen.h / .cpp      目标代码生成（LLVM IR → .o）
-├── grammar.y            bison 语法文件
-├── token.l              flex 词法文件
-├── utils.h / .cpp       错误输出、字符串转义等小工具
-├── main.cpp             程序入口
-├── CMakeLists.txt       构建脚本
-├── build.ps1            Windows 一键构建
-└── tests/               测试用例和测试脚本
+├── ASTNodes.h / .cpp     抽象语法树（第 6 章 6.2.4）—— 只描述语法，不含语义
+├── IntermGen.h / .cpp    语义分析和中间代码产生（第 7 章 7.2 ~ 7.6）
+├── Quadruple.h / .cpp    中间语言：四元式（第 7 章 7.1.3）
+├── TypeSystem.h / .cpp   类型系统和类型检查（第 7 章 7.7）
+├── SymbolTable.h / .cpp  符号表（第 8 章）
+├── Optimizer.h / .cpp    中间代码优化（第 10 章）
+├── Backend.h / .cpp      目标代码生成：四元式 → LLVM IR
+├── ObjGen.h / .cpp       目标文件生成：LLVM IR → .o
+├── token.l               词法分析（第 3 章，用 LEX / flex）
+├── grammar.y             语法分析（第 4、5 章，用 YACC / bison，LALR(1) 分析表）
+├── utils.h / .cpp        错误输出、字符串转义等小工具
+├── main.cpp              程序入口（第 1 章图 1.1 编译程序总框）
+├── CMakeLists.txt        构建脚本
+├── build.ps1             Windows 一键构建
+└── tests/                测试用例和测试脚本
 ```
 
-各部分的职责：
+### 教材章节对照
+
+| 教材 | 章节 | 本项目 |
+| --- | --- | --- |
+| 第 1 章 | 编译程序总框 | `main.cpp` |
+| 第 2 章 | 高级语言基础 | `TypeSystem.h` 里的类型定义 |
+| 第 3 章 | 词法分析（正规式 → DFA → LEX） | `token.l` |
+| 第 4、5 章 | 语法分析（LR / LALR，YACC） | `grammar.y` |
+| 第 6 章 | 抽象语法树 | `ASTNodes.h` |
+| 第 7 章 | 语义分析和中间代码产生 | `IntermGen.cpp`、`Quadruple.cpp`、`TypeSystem.cpp` |
+| 第 8 章 | 符号表 | `SymbolTable.cpp` |
+| 第 9 章 | 运行时存储空间组织 | `Backend.cpp` 里的地址分配 |
+| 第 10 章 | 中间代码优化 | `Optimizer.cpp` |
+
+### 编译流程
+
+完全按教材图 1.1「编译程序总框」：
 
 ```
-源代码
+源程序
   │
-  ├─ token.l   ──词法分析──▶  token 流（关键字 / 标识符 / 字面量 / 运算符）
+  ├─ token.l ──词法分析（第 3 章）──▶ 单词符号
   │
-  ├─ grammar.y ──语法分析──▶ 抽象语法树（ASTNodes.h）
-  │                          每个节点都有 codeGen() 方法
+  ├─ grammar.y ──语法分析（第 4、5 章）──▶ 抽象语法树
   │
-  ├─ CodeGen.cpp ──语义分析 + 中间代码──▶  LLVM IR
-  │                                     （CodeGenContext 维护作用域和符号表）
+  ├─ IntermGen ──语义分析 + 中间代码产生（第 7 章）──▶ 四元式序列
+  │                                                  ＋ 符号表（第 8 章）
+  ├─ Optimizer ──中间代码优化（第 10 章）──▶ 优化后的四元式
   │
-  └─ ObjGen.cpp ──目标代码──▶  output.o
+  ├─ Backend ──目标代码生成──▶ LLVM IR
+  │
+  └─ ObjGen ──目标文件生成──▶ output.o
+```
+
+中间代码用**四元式**表示（教材第 7 章 7.1.3）：
+
+```
+算符 | 左操作数 | 右操作数 | 结果
+```
+
+四个域里的操作数和结果都是**指向符号表表项的指针**，编译期引进的临时变量
+（教材里的 T1、T2）也要登记到符号表里。
+
+想看中间代码长什么样：
+
+```bash
+./build/TinyCompiler --dump-ir -S -o out.ll test.c
 ```
 
 ---
@@ -328,12 +371,15 @@ public:
     std::vector<Node*> children() const override {
         return {lhs.get(), rhs.get()};
     }
-    llvm::Value* codeGen(CodeGenContext& context) override;
 };
 ```
 
 `print()` 和 `toJson()` 都基于 `children()` 在基类里实现一次，所以
 **20 个节点类省掉了 200 多行重复代码**。
+
+注意 AST 节点**只有语法、没有语义**，也不依赖 LLVM：翻译成中间代码是
+`IntermGen` 的事（教材第 7 章的语法制导翻译），这样「语法」和「语义」
+两件事分得清清楚楚。
 ### 4.2 类型引用单独成节点
 
 变量名和类型名都是「名字」，但语义完全不同。早期版本用一个 `NIdentifier`
@@ -358,24 +404,48 @@ public:
 
 好处是「类型」变成了编译器的第一类概念，类型系统不再需要去猜。
 
-### 4.3 作用域与符号表
+### 4.3 符号表（教材第 8 章）
 
-`CodeGenContext` 里维护一个作用域栈，每层作用域一张表：
+`SymbolTable` 是独立的一个模块（教材第 8 章「符号表」），
+它登记源程序里出现的每个名字及其各种属性：
 
 ```cpp
-struct Symbol {
-    llvm::Value* addr = nullptr;   // 指向 type 的指针
-    llvm::Type*  type = nullptr;   // 标量类型 / 数组元素类型
-    std::vector<uint64_t> dims;    // 数组维度，空表示不是数组
+class Symbol {
+public:
+    std::string name;
+    SymbolKind kind;            // 变量 / 函数 / 类型名 / 临时变量 / 常量
+
+    std::string typeName;        // 类型：int、Point ...
+    llvm::Type* llvmType = nullptr;
+    std::vector<uint64_t> dims;  // 数组各维长度，空表示不是数组
+
+    bool hasConstant = false;    // 常量的值，优化器用它做常量折叠
+    double constantValue = 0.0;
+    std::string stringValue;     // 字符串字面量的内容
+
+    llvm::Value* addr = nullptr; // 存储位置
+    bool isFuncArg = false;
+    Symbol* alias = nullptr;     // 公共子表达式被合并后的别名
 };
 ```
 
-`addr` 始终是「指向 `type` 的指针」，标量和数组用同一套约定：
+作用域用**作用域链**组织（教材 8.3「名字的作用范围」），查找时从最内层往外找，
+符合 C 的遮蔽规则：
 
-- 标量：`addr` 指向存放变量值的栈空间，`load(addr)` 就是变量的值
-- 数组：`addr` 指向首元素（下标就是在这个指针上加偏移），等价于 C 里的数组退化
+```cpp
+Symbol* SymbolTable::lookup(const std::string& name) {
+    for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
+        auto it = scope->find(name);
+        if (it != scope->end()) {
+            return it->second;
+        }
+    }
+    return nullptr;
+}
+```
 
-查找变量时从最内层作用域往外找，符合 C 的遮蔽规则：
+表项放在一个「竞技场」里，**不随作用域退出而销毁**——因为四元式里存的就是
+指向表项的指针（教材第 7 章 7.1.3 的说法），表项必须活得比四元式序列长。
 
 ```cpp
 Symbol* CodeGenContext::findSymbol(const std::string& name) {
@@ -573,6 +643,61 @@ bison 默认按 shift 消解，正好符合 C 的行为：
 （原始版本的语法文件有 **143 个**冲突，因为 Makefile 里没给 bison 加 `-Wall`，
 一直静默着。）
 
+### 4.11 中间代码：四元式（教材第 7 章 7.1.3）
+
+一个四元式是带四个域的记录结构：`op`、`arg1`、`arg2`、`result`。
+
+```cpp
+class Quadruple {
+public:
+    QuadOp op;             // 运算符的内部码
+    Symbol* arg1;          // 左操作数，指向符号表表项
+    Symbol* arg2;          // 右操作数
+    Symbol* result;        // 结果
+
+    int label = -1;        // 跳转语句的目标标号
+    int fieldIndex = -1;   // 结构体域的序号
+};
+```
+
+翻译规则（教材 7.2 ~ 7.6）：
+
+| 源程序 | 四元式 |
+| --- | --- |
+| `x := y` | `:=` arg1=y, result=x |
+| `x := y + z` | `+` arg1=y, arg2=z, result=T1；`:=` arg1=T1, result=x |
+| `x := y[i]` | `arrayref` arg1=y, arg2=i, result=T1 |
+| `x := y.f` | `fieldref` arg1=y, result=T1 |
+| `f(a, b)` | `param` a；`param` b；`call` f, result=T1 |
+| `if (e) S1 else S2` | `iffalse` e, L1；S1；`goto` L2；`label` L1；S2；`label` L2 |
+| `for (i; c; s) B` | S；`label` L1；c；`iffalse` c, L2；B；s；`goto` L1；`label` L2 |
+
+两个实现上的细节：
+
+1. **调用实参要先全部求值再统一传递**，否则嵌套调用时内层的实参会串到外层：
+   ```
+   param t1      ← 内层调用的实参
+   call g → t2
+   param t2      ← 外层调用的实参
+   call f → t3
+   ```
+2. 教材 7.3.2 把数组元素的引用展开成若干条「取地址 + 偏移」的四元式；
+   本项目把这一步下沉到后端，用 `arrayref` / `arrayset` 一步表达，
+   效果一样但后端简单一些。
+
+### 4.12 中间代码优化（教材第 10 章）
+
+`Optimizer` 做三件事：
+
+| 优化 | 教材出处 |
+| --- | --- |
+| 常量折叠和常量传播：两个操作数都是编译期已知的值时直接算出结果 | 10.3.1、10.4.2 |
+| 删除公共子表达式：同一个基本块里算过一次的表达式不再算第二次 | 10.3.3 |
+| 删除死代码：结果从来没人用的四元式删掉 | 10.3.1 |
+
+优化在四元式这一层做，和具体的目标机器无关（教材第 7 章 1 节说的
+「便于进行与机器无关的代码优化工作」）。
+
 ---
 
 ## 5. 测试
@@ -628,6 +753,17 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | 浮点变量参与运算生成非法 IR | 代码生成只认 `double`，不认 `float` |
 | 比较运算的结果只有 1 位（LLVM 的 i1），当数值用会读到垃圾 | 比较结果要扩展成 int，和 C 一致 |
 | 关系运算符和相等运算符优先级一样 | `1 < 2 == 1` 解析成 `1 < (2 == 1)`，应为 `(1 < 2) == 1` |
+
+### 新的架构里抓到的问题
+
+| 问题 | 原因 |
+| --- | --- |
+| 数组变量当数值用会读到垃圾 | 数组变量的「值」就是首元素指针，却又去 load 了一次 |
+| 数组退化成指针时对齐不对导致崩溃 | 按指针类型（i8\*）算出了 align 8，实际数据是 char 数组（align 1） |
+| 分支条件不是 i1，生成的 IR 不合法 | LLVM 的条件跳转要求 i1，比较运算的结果是 int，要先转一下 |
+| else 分支所在的块没有终结指令 | 切换到标号块之前，得先给上一个块补一条跳转 |
+| 公共子表达式被误判 | 找公共子表达式时用的是变量的**名字**做 key，不同作用域的同名变量会被当成同一个 |
+| 改结构体后编译出乱七八糟的结果 | 增量编译没重编所有依赖，结构体布局不一致 —— **改头文件后一定要 `rm -rf build` 重新构建** |
 
 ### 崩溃
 
