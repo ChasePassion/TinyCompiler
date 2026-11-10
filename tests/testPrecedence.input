@@ -1,0 +1,37 @@
+extern int printf(string format)
+
+# 这个用例专门检查运算符的优先级和结合性。
+# 语法文件里每个运算符是一条独立规则，优先级由 %left / %precedence 声明决定，
+# 改语法的时候一定要跑这个用例。
+
+int main(){
+    # 乘除优先于加减
+    printf("%d\n", 2 + 3 * 4)
+    printf("%d\n", (2 + 3) * 4)
+
+    # 同优先级从左往右结合
+    printf("%d\n", 10 - 3 - 2)
+    printf("%d\n", 100 / 10 / 2)
+
+    # 比较优先于相等
+    printf("%d\n", 1 < 2 == 1)
+
+    # 一元负号：(-5) + 1 = -4，而不是 -(5 + 1)
+    printf("%d\n", 0 - 5 + 1)
+    printf("%d\n", -5 + 1)
+    printf("%d\n", -5 - 3)
+
+    # 位运算
+    printf("%d\n", 6 & 3)
+    printf("%d\n", 6 | 3)
+    printf("%d\n", 6 ^ 3)
+
+    # 移位
+    printf("%d\n", 1 << 4)
+    printf("%d\n", 32 >> 2)
+
+    # 取模和比较混在一起
+    printf("%d\n", 17 % 5 == 2)
+
+    return 0
+}

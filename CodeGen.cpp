@@ -40,6 +40,11 @@ Value* toBoolean(CodeGenContext& ctx, Value* value) {
     return value;
 }
 
+// 把 LLVM 的比较结果（i1）扩展成 int，和 C 的语义保持一致
+llvm::Value* cmpResult(CodeGenContext& ctx, llvm::Value* comparison) {
+    return ctx.builder.CreateZExt(comparison, ctx.typeSystem.typeByName("int"), "bool");
+}
+
 // 统一两个操作数的类型：
 //   1. 只要有一边是浮点，两边都提升到 double
 //   2. 两边都是整数时，统一到较宽的那个（至少 32 位）
@@ -242,7 +247,7 @@ llvm::Value* NIdentifier::codeGen(CodeGenContext& ctx) {
     }
     // 数组在表达式里退化成指向首元素的指针
     if (!symbol->dims.empty()) {
-        return symbol->arrayBase;
+        return symbol->addr;
     }
     return ctx.builder.CreateLoad(symbol->type, symbol->addr, this->name.c_str());
 }
@@ -288,19 +293,21 @@ llvm::Value* NBinaryOperator::codeGen(CodeGenContext& ctx) {
     case OP_SHR:
         if (isFloat) return LogErrorV("浮点数不支持移位运算");
         return ctx.builder.CreateAShr(left, right, "shr");
-    // 本语言的整数是有符号的，比较运算统一用有符号版本
-    case OP_LT: return isFloat ? ctx.builder.CreateFCmpOLT(left, right, "cmp")
-                               : ctx.builder.CreateICmpSLT(left, right, "cmp");
-    case OP_LE: return isFloat ? ctx.builder.CreateFCmpOLE(left, right, "cmp")
-                               : ctx.builder.CreateICmpSLE(left, right, "cmp");
-    case OP_GT: return isFloat ? ctx.builder.CreateFCmpOGT(left, right, "cmp")
-                               : ctx.builder.CreateICmpSGT(left, right, "cmp");
-    case OP_GE: return isFloat ? ctx.builder.CreateFCmpOGE(left, right, "cmp")
-                               : ctx.builder.CreateICmpSGE(left, right, "cmp");
-    case OP_EQ: return isFloat ? ctx.builder.CreateFCmpOEQ(left, right, "cmp")
-                               : ctx.builder.CreateICmpEQ(left, right, "cmp");
-    case OP_NE: return isFloat ? ctx.builder.CreateFCmpONE(left, right, "cmp")
-                               : ctx.builder.CreateICmpNE(left, right, "cmp");
+    // 比较运算。LLVM 的比较结果只有 1 位（i1），而 C 里关系和相等运算的结果
+    // 是 int（0 或 1），所以这里扩展成 int，免得把 i1 直接当数值用时读到垃圾。
+    // 本语言的整数是有符号的，比较运算统一用有符号版本。
+    case OP_LT: return cmpResult(ctx, isFloat ? ctx.builder.CreateFCmpOLT(left, right, "cmp")
+                                              : ctx.builder.CreateICmpSLT(left, right, "cmp"));
+    case OP_LE: return cmpResult(ctx, isFloat ? ctx.builder.CreateFCmpOLE(left, right, "cmp")
+                                              : ctx.builder.CreateICmpSLE(left, right, "cmp"));
+    case OP_GT: return cmpResult(ctx, isFloat ? ctx.builder.CreateFCmpOGT(left, right, "cmp")
+                                              : ctx.builder.CreateICmpSGT(left, right, "cmp"));
+    case OP_GE: return cmpResult(ctx, isFloat ? ctx.builder.CreateFCmpOGE(left, right, "cmp")
+                                              : ctx.builder.CreateICmpSGE(left, right, "cmp"));
+    case OP_EQ: return cmpResult(ctx, isFloat ? ctx.builder.CreateFCmpOEQ(left, right, "cmp")
+                                              : ctx.builder.CreateICmpEQ(left, right, "cmp"));
+    case OP_NE: return cmpResult(ctx, isFloat ? ctx.builder.CreateFCmpONE(left, right, "cmp")
+                                              : ctx.builder.CreateICmpNE(left, right, "cmp"));
     }
     return LogErrorV("未知的二元运算符");
 }
@@ -377,7 +384,7 @@ llvm::Value* NArrayIndex::codeGen(CodeGenContext& ctx) {
     if (!index) {
         return nullptr;
     }
-    llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+    llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->addr, {index});
     return ctx.builder.CreateLoad(symbol->type, elementPtr, "elem");
 }
 
@@ -398,7 +405,7 @@ llvm::Value* NArrayAssignment::codeGen(CodeGenContext& ctx) {
     if (!index) {
         return nullptr;
     }
-    llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+    llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->addr, {index});
     ctx.builder.CreateStore(value, elementPtr);
     return value;
 }
@@ -449,7 +456,6 @@ llvm::Value* NExpressionStatement::codeGen(CodeGenContext& ctx) {
 
 llvm::Value* NVariableDeclaration::codeGen(CodeGenContext& ctx) {
     Symbol symbol;
-    symbol.typeName = this->type->name;
     symbol.dims = this->type->dims;
 
     if (this->type->isArray()) {
@@ -460,9 +466,8 @@ llvm::Value* NVariableDeclaration::codeGen(CodeGenContext& ctx) {
         llvm::Type* storageType = ctx.typeSystem.arrayStorageType(*this->type);
         llvm::Value* slot = ctx.builder.CreateAlloca(storageType, nullptr, this->id->name.c_str());
         symbol.type = elementType;
-        symbol.addr = slot;
         // 指向首元素的指针，等价于 C 里数组退化成的指针
-        symbol.arrayBase = createGEP(ctx, storageType, slot, {zero(ctx), zero(ctx)});
+        symbol.addr = createGEP(ctx, storageType, slot, {zero(ctx), zero(ctx)});
     } else {
         llvm::Type* type = ctx.typeSystem.llvmType(*this->type);
         if (!type) {
@@ -516,13 +521,12 @@ llvm::Value* NFunctionDeclaration::codeGen(CodeGenContext& ctx) {
         argument->setName(param->id->name);
 
         Symbol symbol;
-        symbol.typeName = param->type->name;
         symbol.dims = param->type->dims;
 
         if (param->type->isArray()) {
             // 数组形参退化成指针，直接用传进来的指针
             symbol.type = ctx.typeSystem.typeByName(param->type->name);
-            symbol.arrayBase = argument;
+            symbol.addr = argument;
         } else {
             llvm::Type* type = ctx.typeSystem.llvmType(*param->type);
             if (!type) {
@@ -714,7 +718,7 @@ llvm::Value* NArrayInitialization::codeGen(CodeGenContext& ctx) {
         }
         value = ctx.typeSystem.cast(value, symbol->type, ctx.builder);
         llvm::Value* index = llvm::ConstantInt::get(intType, i);
-        llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+        llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->addr, {index});
         ctx.builder.CreateStore(value, elementPtr);
     }
     return nullptr;

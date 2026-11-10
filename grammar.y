@@ -33,11 +33,11 @@ void yyerror(const char* s) {
     int token;
 }
 
-%token <text> TIDENTIFIER TINTEGER TDOUBLE TYINT TYDOUBLE TYFLOAT TYCHAR TYBOOL TYVOID TYSTRING TEXTERN TLITERAL
-%token <token> TCEQ TCNE TCLT TCLE TCGT TCGE TEQUAL
-%token <token> TLPAREN TRPAREN TLBRACE TRBRACE TCOMMA TDOT TSEMICOLON TLBRACKET TRBRACKET
-%token <token> TPLUS TMINUS TMUL TDIV TAND TOR TXOR TMOD TSHIFTL TSHIFTR
-%token <token> TIF TELSE TFOR TWHILE TRETURN TSTRUCT
+%token <text> TIDENTIFIER TINTEGER TDOUBLE TTYPENAME TEXTERN TLITERAL
+%token TCEQ TCNE TCLT TCLE TCGT TCGE TEQUAL
+%token TLPAREN TRPAREN TLBRACE TRBRACE TCOMMA TDOT TSEMICOLON TLBRACKET TRBRACKET
+%token TPLUS TMINUS TMUL TDIV TAND TOR TXOR TMOD TSHIFTL TSHIFTR
+%token TIF TELSE TFOR TWHILE TRETURN TSTRUCT
 
 %type <index> array_index
 %type <ident> ident
@@ -46,18 +46,24 @@ void yyerror(const char* s) {
 %type <varvec> func_decl_args struct_members
 %type <exprvec> call_args
 %type <block> program stmts block
-%type <stmt> stmt var_decl array_decl func_decl struct_decl if_stmt for_stmt while_stmt
+%type <stmt> stmt array_decl func_decl struct_decl if_stmt for_stmt while_stmt
 %type <var_decl> param_decl
-%type <token> comparison
 
-/* 运算符优先级，从低到高，和 C 语言保持一致 */
-%left TPLUS TMINUS
-%left TMUL TDIV TMOD
-%left TSHIFTL TSHIFTR
-%left TAND
-%left TXOR
-%left TOR
-%left TCEQ TCNE TCLT TCLE TCGT TCGE
+/* 运算符优先级，从低到高，完全照 C 语言来：
+     赋值  <  |  <  ^  <  &  <  == !=  <  < <= > >=  <  << >>  <  + -  <  * / %
+   赋值（TEQUAL）优先级最低、右结合，这样 a = b + c 才会归约成 a = (b + c)。 */
+%precedence TEQUAL
+%left TOR                   /* |  按位或 */
+%left TXOR                  /* ^  按位异或 */
+%left TAND                  /* &  按位与 */
+%left TCEQ TCNE             /* == !=  相等 */
+%left TCLT TCLE TCGT TCGE   /* < <= > >=  关系 */
+%left TSHIFTL TSHIFTR       /* << >>  移位 */
+%left TPLUS TMINUS          /* + - */
+%left TMUL TDIV TMOD        /* * / % */
+
+/* 一元负号的优先级要比二元减号高，否则 -a + b 和 a - b 分不开 */
+%precedence UMINUS
 
 %start program
 
@@ -70,7 +76,7 @@ stmts : stmt { $$ = new NBlock(); $$->statements.push_back(std::shared_ptr<NStat
       | stmts stmt { $1->statements.push_back(std::shared_ptr<NStatement>($2)); }
       ;
 
-stmt : var_decl
+stmt : param_decl { $$ = $1; }
      | array_decl
      | func_decl
      | struct_decl
@@ -87,13 +93,9 @@ block : TLBRACE stmts TRBRACE { $$ = $2; }
 
 /* ---------------------------------------------------------------- 类型 */
 
-primary_typename : TYINT    { $$ = new NTypeRef(*$1); delete $1; }
-                | TYDOUBLE { $$ = new NTypeRef(*$1); delete $1; }
-                | TYFLOAT  { $$ = new NTypeRef(*$1); delete $1; }
-                | TYCHAR   { $$ = new NTypeRef(*$1); delete $1; }
-                | TYBOOL   { $$ = new NTypeRef(*$1); delete $1; }
-                | TYVOID   { $$ = new NTypeRef(*$1); delete $1; }
-                | TYSTRING { $$ = new NTypeRef(*$1); delete $1; }
+/* 内置类型名（int / double / ...）统一用 TTYPENAME 一个 token 表示，
+   具体是哪种类型由名字决定，类型系统那边去查。 */
+primary_typename : TTYPENAME { $$ = new NTypeRef(*$1); delete $1; }
                 ;
 
 array_typename : primary_typename TLBRACKET TINTEGER TRBRACKET {
@@ -130,9 +132,6 @@ param_decl : typename ident {
             }
             ;
 
-var_decl : param_decl { $$ = $1; }
-         ;
-
 array_decl : typename ident TEQUAL TLBRACKET call_args TRBRACKET {
                  auto declaration = std::make_shared<NVariableDeclaration>(
                      std::shared_ptr<NTypeRef>($1), std::shared_ptr<NIdentifier>($2), nullptr);
@@ -161,7 +160,7 @@ func_decl : typename ident TLPAREN func_decl_args TRPAREN block {
            }
            ;
 
-func_decl_args : /* empty */ {
+func_decl_args : %empty {
                      $$ = new std::vector<std::shared_ptr<NVariableDeclaration>>();
                  }
                 | param_decl {
@@ -194,9 +193,48 @@ expr : assign { $$ = $1; }
                                   std::shared_ptr<NIdentifier>($3));
        }
      | numeric
-     | expr comparison expr {
-           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1),
-                                    static_cast<BinOp>($2),
+     | expr TCEQ expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_EQ,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TCNE expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_NE,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TCLT expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_LT,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TCLE expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_LE,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TCGT expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_GT,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TCGE expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_GE,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TAND expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_AND,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TOR expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_OR,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TXOR expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_XOR,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TSHIFTL expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_SHL,
+                                    std::shared_ptr<NExpression>($3));
+       }
+     | expr TSHIFTR expr {
+           $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_SHR,
                                     std::shared_ptr<NExpression>($3));
        }
      | expr TMOD expr {
@@ -254,7 +292,7 @@ assign : ident TEQUAL expr {
          }
         ;
 
-call_args : /* empty */ { $$ = new std::vector<std::shared_ptr<NExpression>>(); }
+call_args : %empty { $$ = new std::vector<std::shared_ptr<NExpression>>(); }
            | expr {
                $$ = new std::vector<std::shared_ptr<NExpression>>();
                $$->push_back(std::shared_ptr<NExpression>($1));
@@ -263,19 +301,6 @@ call_args : /* empty */ { $$ = new std::vector<std::shared_ptr<NExpression>>(); 
            ;
 
 /* comparison 的值就是 BinOp，方便后面直接生成代码 */
-comparison : TCEQ { $$ = OP_EQ; }
-           | TCNE { $$ = OP_NE; }
-           | TCLT { $$ = OP_LT; }
-           | TCLE { $$ = OP_LE; }
-           | TCGT { $$ = OP_GT; }
-           | TCGE { $$ = OP_GE; }
-           | TAND { $$ = OP_AND; }
-           | TOR { $$ = OP_OR; }
-           | TXOR { $$ = OP_XOR; }
-           | TSHIFTL { $$ = OP_SHL; }
-           | TSHIFTR { $$ = OP_SHR; }
-           ;
-
 /* -------------------------------------------------------------- 控制流 */
 
 if_stmt : TIF expr block {
@@ -319,7 +344,7 @@ struct_decl : TSTRUCT ident TLBRACE struct_members TRBRACE {
              }
              ;
 
-struct_members : /* empty */ { $$ = new std::vector<std::shared_ptr<NVariableDeclaration>>(); }
+struct_members : %empty { $$ = new std::vector<std::shared_ptr<NVariableDeclaration>>(); }
                 | param_decl {
                     $$ = new std::vector<std::shared_ptr<NVariableDeclaration>>();
                     $$->push_back(std::shared_ptr<NVariableDeclaration>($1));

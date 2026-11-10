@@ -4,7 +4,7 @@
 
 #include <iostream>
 
-const char* OpName(BinOp op) {
+std::string OpName(BinOp op) {
     switch (op) {
     case OP_ADD: return "+";
     case OP_SUB: return "-";

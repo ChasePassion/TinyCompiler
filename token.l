@@ -42,13 +42,10 @@ int currentLine = 1;
 "for"                   return TOKEN(TFOR);
 "while"                 return TOKEN(TWHILE);
 "struct"                return TOKEN(TSTRUCT);
-"int"                   SAVE_TOKEN; return TYINT;
-"double"                SAVE_TOKEN; return TYDOUBLE;
-"float"                 SAVE_TOKEN; return TYFLOAT;
-"char"                  SAVE_TOKEN; return TYCHAR;
-"bool"                  SAVE_TOKEN; return TYBOOL;
-"string"                SAVE_TOKEN; return TYSTRING;
-"void"                  SAVE_TOKEN; return TYVOID;
+"int"|"double"|"float"|"char"|"bool"|"string"|"void" {
+                           // 内置类型名统一用 TTYPENAME，具体哪种类型由名字决定
+                           SAVE_TOKEN; return TTYPENAME;
+                         }
 "extern"                SAVE_TOKEN; return TEXTERN;
 [a-zA-Z_][a-zA-Z0-9_]*   SAVE_TOKEN; return TIDENTIFIER;
 [0-9]+\.[0-9]*          SAVE_TOKEN; return TDOUBLE;

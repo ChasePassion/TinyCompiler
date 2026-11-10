@@ -18,7 +18,8 @@ enum BinOp {
     OP_LT, OP_LE, OP_GT, OP_GE, OP_EQ, OP_NE
 };
 
-const char* OpName(BinOp op);
+// 运算符的符号形式，给 AST 打印用
+std::string OpName(BinOp op);
 
 // ---------------------------------------------------------------------------
 // AST 节点基类
@@ -26,8 +27,7 @@ const char* OpName(BinOp op);
 // 所有语法树节点都继承自 Node。基类统一提供 print()（文本形式）和 toJson()
 // （AST 可视化用），子类一般只需要实现其中的一两个方法：
 //
-//   getTypeName()   节点类型名，必须实现
-//   label()         节点在树上的显示文本，可选，默认等于类型名
+//   label()         节点在树上的显示文本，必须实现
 //   children()      子节点列表，可选，默认空
 //   codeGen()       生成 LLVM IR，可选，默认什么都不生成
 // ---------------------------------------------------------------------------
@@ -35,8 +35,7 @@ class Node {
 public:
     virtual ~Node() = default;
 
-    virtual const char* getTypeName() const = 0;
-    virtual std::string label() const { return getTypeName(); }
+    virtual std::string label() const = 0;
     virtual std::vector<Node*> children() const { return {}; }
     virtual llvm::Value* codeGen(CodeGenContext& context) { (void)context; return nullptr; }
 
@@ -63,7 +62,6 @@ public:
     NTypeRef() = default;
     explicit NTypeRef(std::string n) : name(std::move(n)) {}
 
-    const char* getTypeName() const override { return "NTypeRef"; }
     std::string label() const override {
         std::string s = name;
         for (uint64_t d : dims) {
@@ -89,7 +87,7 @@ public:
 // ---------------------------------------------------------------------------
 class NExpression : public Node {
 public:
-    const char* getTypeName() const override { return "NExpression"; }
+    std::string label() const override { return "NExpression"; }
 };
 
 // 整数字面量
@@ -100,9 +98,8 @@ public:
     NInteger() = default;
     explicit NInteger(int64_t v) : value(v) {}
 
-    const char* getTypeName() const override { return "NInteger"; }
     std::string label() const override {
-        return std::string(getTypeName()) + ":" + std::to_string(value);
+        return "NInteger:" + std::to_string(value);
     }
     llvm::Value* codeGen(CodeGenContext& context) override;
 };
@@ -115,9 +112,8 @@ public:
     NDouble() = default;
     explicit NDouble(double v) : value(v) {}
 
-    const char* getTypeName() const override { return "NDouble"; }
     std::string label() const override {
-        return std::string(getTypeName()) + ":" + std::to_string(value);
+        return "NDouble:" + std::to_string(value);
     }
     llvm::Value* codeGen(CodeGenContext& context) override;
 };
@@ -130,9 +126,8 @@ public:
     NLiteral() = default;
     explicit NLiteral(std::string v) : value(std::move(v)) {}
 
-    const char* getTypeName() const override { return "NLiteral"; }
     std::string label() const override {
-        return std::string(getTypeName()) + ":" + value;
+        return "NLiteral:" + value;
     }
     llvm::Value* codeGen(CodeGenContext& context) override;
 };
@@ -145,9 +140,8 @@ public:
     NIdentifier() = default;
     explicit NIdentifier(std::string n) : name(std::move(n)) {}
 
-    const char* getTypeName() const override { return "NIdentifier"; }
     std::string label() const override {
-        return std::string(getTypeName()) + ":" + name;
+        return "NIdentifier:" + name;
     }
     llvm::Value* codeGen(CodeGenContext& context) override;
 };
@@ -163,9 +157,8 @@ public:
     NBinaryOperator(std::shared_ptr<NExpression> l, BinOp o, std::shared_ptr<NExpression> r)
         : lhs(std::move(l)), rhs(std::move(r)), op(o) {}
 
-    const char* getTypeName() const override { return "NBinaryOperator"; }
     std::string label() const override {
-        return std::string(getTypeName()) + ":" + OpName(op);
+        return "NBinaryOperator:" + OpName(op);
     }
     std::vector<Node*> children() const override {
         return {lhs.get(), rhs.get()};
@@ -183,7 +176,7 @@ public:
     NAssignment(std::shared_ptr<NIdentifier> l, std::shared_ptr<NExpression> r)
         : lhs(std::move(l)), rhs(std::move(r)) {}
 
-    const char* getTypeName() const override { return "NAssignment"; }
+    std::string label() const override { return "NAssignment"; }
     std::vector<Node*> children() const override {
         return {lhs.get(), rhs.get()};
     }
@@ -200,7 +193,7 @@ public:
     NMethodCall(std::shared_ptr<NIdentifier> i, std::vector<std::shared_ptr<NExpression>> a)
         : id(std::move(i)), args(std::move(a)) {}
 
-    const char* getTypeName() const override { return "NMethodCall"; }
+    std::string label() const override { return "NMethodCall"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out;
         out.push_back(id.get());
@@ -222,7 +215,7 @@ public:
     NStructMember(std::shared_ptr<NIdentifier> i, std::shared_ptr<NIdentifier> m)
         : id(std::move(i)), member(std::move(m)) {}
 
-    const char* getTypeName() const override { return "NStructMember"; }
+    std::string label() const override { return "NStructMember"; }
     std::vector<Node*> children() const override {
         return {id.get(), member.get()};
     }
@@ -239,7 +232,7 @@ public:
     NArrayIndex(std::shared_ptr<NIdentifier> n, std::vector<std::shared_ptr<NExpression>> e)
         : arrayName(std::move(n)), exprs(std::move(e)) {}
 
-    const char* getTypeName() const override { return "NArrayIndex"; }
+    std::string label() const override { return "NArrayIndex"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out;
         out.push_back(arrayName.get());
@@ -261,7 +254,7 @@ public:
     NArrayAssignment(std::shared_ptr<NArrayIndex> i, std::shared_ptr<NExpression> e)
         : index(std::move(i)), expression(std::move(e)) {}
 
-    const char* getTypeName() const override { return "NArrayAssignment"; }
+    std::string label() const override { return "NArrayAssignment"; }
     std::vector<Node*> children() const override {
         return {index.get(), expression.get()};
     }
@@ -278,7 +271,7 @@ public:
     NStructAssignment(std::shared_ptr<NStructMember> m, std::shared_ptr<NExpression> e)
         : member(std::move(m)), expression(std::move(e)) {}
 
-    const char* getTypeName() const override { return "NStructAssignment"; }
+    std::string label() const override { return "NStructAssignment"; }
     std::vector<Node*> children() const override {
         return {member.get(), expression.get()};
     }
@@ -290,7 +283,7 @@ public:
 // ---------------------------------------------------------------------------
 class NStatement : public Node {
 public:
-    const char* getTypeName() const override { return "NStatement"; }
+    std::string label() const override { return "NStatement"; }
 };
 
 // 语句块 { ... }
@@ -302,7 +295,7 @@ public:
     explicit NBlock(std::vector<std::shared_ptr<NStatement>> s)
         : statements(std::move(s)) {}
 
-    const char* getTypeName() const override { return "NBlock"; }
+    std::string label() const override { return "NBlock"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out;
         for (auto& s : statements) {
@@ -322,7 +315,7 @@ public:
     explicit NExpressionStatement(std::shared_ptr<NExpression> e)
         : expression(std::move(e)) {}
 
-    const char* getTypeName() const override { return "NExpressionStatement"; }
+    std::string label() const override { return "NExpressionStatement"; }
     std::vector<Node*> children() const override {
         return {expression.get()};
     }
@@ -341,7 +334,7 @@ public:
                          std::shared_ptr<NExpression> in = nullptr)
         : type(std::move(t)), id(std::move(i)), init(std::move(in)) {}
 
-    const char* getTypeName() const override { return "NVariableDeclaration"; }
+    std::string label() const override { return "NVariableDeclaration"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out{type.get(), id.get()};
         if (init) {
@@ -368,7 +361,7 @@ public:
         : type(std::move(t)), id(std::move(i)), params(std::move(p)),
           body(std::move(b)), isExtern(ext) {}
 
-    const char* getTypeName() const override { return "NFunctionDeclaration"; }
+    std::string label() const override { return "NFunctionDeclaration"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out{type.get(), id.get()};
         for (auto& p : params) {
@@ -393,7 +386,7 @@ public:
                        std::vector<std::shared_ptr<NVariableDeclaration>> m)
         : name(std::move(n)), members(std::move(m)) {}
 
-    const char* getTypeName() const override { return "NStructDeclaration"; }
+    std::string label() const override { return "NStructDeclaration"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out;
         out.push_back(name.get());
@@ -414,7 +407,7 @@ public:
     explicit NReturnStatement(std::shared_ptr<NExpression> e)
         : expression(std::move(e)) {}
 
-    const char* getTypeName() const override { return "NReturnStatement"; }
+    std::string label() const override { return "NReturnStatement"; }
     std::vector<Node*> children() const override {
         return {expression.get()};
     }
@@ -433,7 +426,7 @@ public:
                  std::shared_ptr<NBlock> f = nullptr)
         : condition(std::move(c)), trueBlock(std::move(t)), falseBlock(std::move(f)) {}
 
-    const char* getTypeName() const override { return "NIfStatement"; }
+    std::string label() const override { return "NIfStatement"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out{condition.get(), trueBlock.get()};
         if (falseBlock) {
@@ -458,7 +451,7 @@ public:
         : body(std::move(b)), initial(std::move(i)), condition(std::move(c)),
           increment(std::move(inc)) {}
 
-    const char* getTypeName() const override { return "NForStatement"; }
+    std::string label() const override { return "NForStatement"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out;
         if (initial) {
@@ -487,7 +480,7 @@ public:
                          std::vector<std::shared_ptr<NExpression>> e)
         : declaration(std::move(d)), elements(std::move(e)) {}
 
-    const char* getTypeName() const override { return "NArrayInitialization"; }
+    std::string label() const override { return "NArrayInitialization"; }
     std::vector<Node*> children() const override {
         std::vector<Node*> out;
         out.push_back(declaration.get());

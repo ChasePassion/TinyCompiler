@@ -15,14 +15,14 @@
 
 // 一个变量的运行时信息。
 //
-// 标量变量：addr 指向存放变量值的栈空间。
-// 数组变量：addr 指向整块数组空间，arrayBase 指向首元素（等价于 C 里的数组退化）。
+// addr 始终是「指向 type 的指针」，标量和数组用的是同一套约定：
+//   标量：addr 指向存放变量值的栈空间，load(addr) 得到变量的值
+//   数组：addr 指向首元素（下标就是在这个指针上加偏移），等价于 C 里的数组退化
+// dims 为空表示不是数组。
 struct Symbol {
-    llvm::Value* addr = nullptr;       // 标量：存储地址
-    llvm::Value* arrayBase = nullptr;  // 数组：首元素指针
-    llvm::Type*  type = nullptr;       // 标量类型 / 数组元素类型
-    std::string  typeName;             // 源语言类型名
-    std::vector<uint64_t> dims;        // 数组各维长度，空表示不是数组
+    llvm::Value* addr = nullptr;   // 指向 type 的指针
+    llvm::Type*  type = nullptr;   // 标量类型 / 数组元素类型
+    std::vector<uint64_t> dims;    // 数组维度，空表示不是数组
 };
 
 // 作用域：一张「名字 -> 变量信息」的表

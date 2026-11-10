@@ -182,6 +182,7 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | `testStruct` | 结构体定义、成员访问与赋值、scanf 读字符串 |
 | `testExtern` | 外部函数声明、浮点格式化输出 |
 | `testBugfix` | 专门锁住那些曾经出过问题的行为（见第 6 节） |
+| `testPrecedence` | 运算符优先级和结合性 |
 | `link_demo` | TinyCompiler 编译的函数和普通 C++ 代码链接在一起 |
 
 ---
@@ -309,8 +310,7 @@ int main(){
 
 | 方法 | 作用 |
 | --- | --- |
-| `getTypeName()` | 节点类型名，必须实现 |
-| `label()` | 节点在树上显示的文本，默认等于类型名 |
+| `label()` | 节点在树上显示的文本，必须实现 |
 | `children()` | 子节点列表，默认空 |
 | `codeGen()` | 生成 LLVM IR，默认什么都不生成 |
 | `print()` | 打印整棵子树（基类实现） |
@@ -324,7 +324,7 @@ public:
     std::shared_ptr<NIdentifier> lhs;
     std::shared_ptr<NExpression> rhs;
 
-    const char* getTypeName() const override { return "NAssignment"; }
+    std::string label() const override { return "NAssignment"; }
     std::vector<Node*> children() const override {
         return {lhs.get(), rhs.get()};
     }
@@ -334,7 +334,6 @@ public:
 
 `print()` 和 `toJson()` 都基于 `children()` 在基类里实现一次，所以
 **20 个节点类省掉了 200 多行重复代码**。
-
 ### 4.2 类型引用单独成节点
 
 变量名和类型名都是「名字」，但语义完全不同。早期版本用一个 `NIdentifier`
@@ -365,13 +364,16 @@ public:
 
 ```cpp
 struct Symbol {
-    llvm::Value* addr = nullptr;       // 标量：存放变量值的栈空间地址
-    llvm::Value* arrayBase = nullptr;  // 数组：指向首元素的指针
-    llvm::Type*  type = nullptr;       // 标量类型 / 数组元素类型
-    std::string  typeName;             // 源语言里的类型名
-    std::vector<uint64_t> dims;        // 数组维度，空表示不是数组
+    llvm::Value* addr = nullptr;   // 指向 type 的指针
+    llvm::Type*  type = nullptr;   // 标量类型 / 数组元素类型
+    std::vector<uint64_t> dims;    // 数组维度，空表示不是数组
 };
 ```
+
+`addr` 始终是「指向 `type` 的指针」，标量和数组用同一套约定：
+
+- 标量：`addr` 指向存放变量值的栈空间，`load(addr)` 就是变量的值
+- 数组：`addr` 指向首元素（下标就是在这个指针上加偏移），等价于 C 里的数组退化
 
 查找变量时从最内层作用域往外找，符合 C 的遮蔽规则：
 
@@ -393,14 +395,14 @@ Symbol* CodeGenContext::findSymbol(const std::string& name) {
 
 本项目把这件事显式地存进了符号表：
 
-- 局部数组 `int[13] arr` → 分配 `[13 x i32]`，`arrayBase` 指向首元素
-- 数组形参 `int arr[10]` → 本来就是指针，`arrayBase` 直接用传进来的值
+- 局部数组 `int[13] arr` → 分配 `[13 x i32]`，`addr` 指向首元素
+- 数组形参 `int arr[10]` → 本来就是指针，`addr` 直接用传进来的值
 
 于是取元素的代码只有一种写法：
 
 ```cpp
 llvm::Value* index = flatIndex(ctx, *symbol, this->exprs);   // 算出下标
-llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->arrayBase, {index});
+llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->addr, {index});
 return ctx.builder.CreateLoad(symbol->type, elementPtr, "elem");
 ```
 
@@ -540,6 +542,37 @@ $ echo $?
 这样做的好处是：代码生成里任何一步失败都只是「返回 nullptr + 记一个错」，
 不会像以前那样直接访问空指针把程序带崩。
 
+### 4.10 语法文件：优先级和冲突
+
+`grammar.y` 里每个运算符都是一条独立规则，靠 `%left` / `%precedence` 声明优先级，
+顺序完全照 C 语言来：
+
+```
+赋值 < | < ^ < & < == != < < <= > >= < << >> < + - < * / %
+```
+
+**这里有个坑**：如果把一堆运算符写进一个 `comparison` 之类的中间非终结符，
+bison 就没法用优先级消解冲突（会报一堆 "useless associativity"），
+表达式也不会按 C 的优先级解析。所以每个运算符一条规则。
+
+改完语法文件后可以这样检查冲突：
+
+```bash
+bison -Wall -d -o grammar.cpp grammar.y
+```
+
+目前还剩 **6 个 shift/reduce 冲突**，都是 C 类语法在 LALR(1) 下的固有歧义，
+bison 默认按 shift 消解，正好符合 C 的行为：
+
+| 冲突 | 为什么消不掉 |
+| --- | --- |
+| `ident (` ×2 | 是函数调用还是函数声明？真实编译器要靠语法分析器里的符号表才能区分 |
+| `TMINUS` ×2 | 一元负号还是二元减号？用 `%prec UMINUS` 解决 |
+| `TTYPENAME` / `TSTRUCT` ×2 | 结构体成员列表可以为空，空规则和「开始一个新成员」二选一 |
+
+（原始版本的语法文件有 **143 个**冲突，因为 Makefile 里没给 bison 加 `-Wall`，
+一直静默着。）
+
 ---
 
 ## 5. 测试
@@ -593,6 +626,8 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | 三维及以上的数组下标算错 | 下标换算公式只对两维正确 |
 | 调用后面才定义的函数会崩溃 | 语法分析阶段没有做函数原型收集 |
 | 浮点变量参与运算生成非法 IR | 代码生成只认 `double`，不认 `float` |
+| 比较运算的结果只有 1 位（LLVM 的 i1），当数值用会读到垃圾 | 比较结果要扩展成 int，和 C 一致 |
+| 关系运算符和相等运算符优先级一样 | `1 < 2 == 1` 解析成 `1 < (2 == 1)`，应为 `(1 < 2) == 1` |
 
 ### 崩溃
 
