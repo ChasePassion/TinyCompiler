@@ -3,6 +3,10 @@ extern int printf(string format)
 # 这个文件里的每个函数都对应一个曾经出过的 bug，改动代码生成逻辑时
 # 记得跑一遍测试（tests/testBugfix.expected 里有对应的期望输出）。
 
+# 没有返回值的函数（曾经因为把 void 当成普通值而崩溃）
+void noReturn(){
+}
+
 # 1. return 写在 if/else 分支里也必须真的返回
 int sign(int x){
     if( x < 0 ){
@@ -66,6 +70,7 @@ int later(int v){
 }
 
 int main(){
+    noReturn()
     printf("sign(-5)=%d\n", sign(-5))
     printf("negative=%d\n", negative())
     printf("modulo=%d\n", modulo())

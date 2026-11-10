@@ -73,6 +73,8 @@ struct FunctionCode {
     // 函数里定义的局部变量（教材 9.3.4 地址分配要用）
     std::vector<Symbol*> locals;
     std::vector<Quadruple> quads;
+    // 是只有声明（extern）还是真的有函数体
+    bool isDefinition = true;
 };
 
 // 整个程序的中间代码

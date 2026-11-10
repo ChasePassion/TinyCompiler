@@ -68,7 +68,7 @@ void ObjGen(CodeGenContext& context, const std::string& filename) {
 
     // 先检查 IR 合法性，出问题早点报错
     if (llvm::verifyModule(*context.theModule, &llvm::errs())) {
-        llvm::errs() << "error: 生成的 LLVM IR 不合法\n";
+        LogError("生成的 LLVM IR 不合法");
         return;
     }
 

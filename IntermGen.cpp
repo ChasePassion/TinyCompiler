@@ -192,12 +192,16 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
         for (Symbol* value : arguments) {
             emit(QuadOp::Param, value, nullptr, nullptr);
         }
+        // void 函数没有返回值，不建结果变量
+        if (function->llvmType && function->llvmType->isVoidTy()) {
+            emit(QuadOp::Call, function, nullptr, nullptr);
+            return nullptr;
+        }
         Symbol* temp = symbols_.newTemporary();
         temp->typeName = function->typeName;
         temp->llvmType = function->llvmType;
         emit(QuadOp::Call, function, nullptr, temp);
-        return temp;
-    }
+        return temp;    }
 
     // 结构体成员引用（教材 7.3.3）
     if (auto* n = dynamic_cast<NStructMember*>(&node)) {
@@ -486,6 +490,7 @@ void IntermGen::translateFunction(NFunctionDeclaration& node) {
     FunctionCode code;
     code.name = node.id->name;
     code.returnTypeName = node.type->name;
+    code.isDefinition = !node.isExtern;
 
     symbols_.pushScope();
     for (auto& parameter : node.params) {

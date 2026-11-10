@@ -51,7 +51,7 @@ void Backend::generateFunction(const FunctionCode& function) {
     }
 
     // 只有声明没有函数体（比如 extern 声明），到此为止
-    if (function.quads.empty()) {
+    if (!function.isDefinition) {
         return;
     }
 
@@ -324,7 +324,9 @@ void Backend::translateQuad(const Quadruple& quad) {
         }
         pendingArguments_.clear();
 
-        Value* call = ctx_.builder.CreateCall(callee, arguments, "call");
+        // void 类型的调用不能起名字（LLVM 会报「provides a void value」）
+        const char* callName = callee->getReturnType()->isVoidTy() ? "" : "call";
+        Value* call = ctx_.builder.CreateCall(callee, arguments, callName);
         if (quad.result) {
             ctx_.builder.CreateStore(call, addressOf(quad.result));
         }
