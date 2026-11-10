@@ -42,16 +42,20 @@ LLVM 官方在 Windows 上发的是**两个不同的包**，内容差别很大�
 
 所以在 Windows 上有三条路可选，**推荐第 1 条**：
 
-**① 官方 tar.xz（推荐，最"正统"）**
+**① 官方 tar.xz（推荐，最"正统"，本项目默认用这个）**
 
 ```powershell
 # 下载（走代理的话加上 --proxy）
 curl -L -o llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz
-# 解压后目录结构是 clang+llvm-22.1.8-x86_64-pc-windows-msvc/{bin,include,lib}
+# 解压
+tar -xf llvm.tar.xz -C E:\LLVM-full
 ```
 
-这个包解压后自带 `llvm-config.exe`、`LLVMConfig.cmake`、完整的头文件和静态库，
+解压后目录是 `clang+llvm-22.1.8-x86_64-pc-windows-msvc/{bin,include,lib}`，
+自带 `llvm-config.exe`、`LLVMConfig.cmake`、完整的头文件和静态库，
 而且**不依赖 zlib/zstd 动态库**（编出来的 exe 只依赖系统 DLL）。
+
+`build.ps1` 会自动在 `E:\LLVM-full`、`C:\LLVM-full` 等位置找它。
 
 **② conda-forge**
 
@@ -88,10 +92,11 @@ pwsh -File build.ps1
 ```
 
 `build.ps1` 会自动加载 Visual Studio 的编译环境、找到 LLVM / flex / bison，
-然后调用 CMake。路径可以用参数覆盖：
+然后调用 CMake。LLVM 目录默认会自动探测（`E:\LLVM-full`、`C:\LLVM-full`、
+`C:\Program Files\LLVM` 等），也可以显式指定：
 
 ```powershell
-# 用官方 tar.xz 解压出来的 LLVM
+# 用官方 tar.xz 解压出来的 LLVM（自动探测不到时）
 pwsh -File build.ps1 -LlvmDir 'E:\LLVM-full\clang+llvm-22.1.8-x86_64-pc-windows-msvc'
 
 # 或者用 conda-forge 的 llvmdev

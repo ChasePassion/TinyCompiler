@@ -12,6 +12,7 @@
 #>
 param(
     [string]$BuildDir = "build",
+    [string]$LlvmDir = "",
     [switch]$UpdateExpected
 )
 
@@ -60,7 +61,31 @@ if (-not $compiler) {
     exit 1
 }
 
-$linker = Find-Executable -Names @("clang.exe", "clang") -ExtraDirs @("E:\LLVM\bin")
+function Find-LlvmDir {
+    # 找一份完整版 LLVM（要有 bin\clang.exe），用来链接测试程序
+    $candidates = @()
+    if ($LlvmDir) { $candidates += $LlvmDir }
+    foreach ($r in @("E:\LLVM-full", "C:\LLVM-full")) {
+        if (Test-Path $r) {
+            $candidates += (Get-ChildItem $r -Directory -ErrorAction SilentlyContinue |
+                            Where-Object { $_.Name -like "clang+llvm-*" } |
+                            Select-Object -ExpandProperty FullName)
+        }
+    }
+    $candidates += @("C:\Program Files\LLVM", "E:\LLVM")
+    foreach ($c in $candidates) {
+        if (Test-Path (Join-Path $c "bin\clang.exe")) { return $c }
+    }
+    return ""
+}
+
+$LlvmDir = Find-LlvmDir
+
+$linker = Find-Executable -Names @("clang.exe", "clang") -ExtraDirs @(
+    (Join-Path $LlvmDir "bin"),
+    "E:\LLVM-full\clang+llvm-22.1.8-x86_64-pc-windows-msvc\bin",
+    "E:\LLVM\bin"
+)
 if (-not $linker) {
     $linker = Find-Executable -Names @("g++.exe", "g++")
 }
