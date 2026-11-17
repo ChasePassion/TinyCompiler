@@ -29,39 +29,49 @@ message(STATUS "使用 flex ${FLEX_VERSION} (${FLEX_EXECUTABLE})")
 set(GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
-# bison: grammar.y -> grammar.cpp + grammar.hpp
-bison_target(Grammar ${CMAKE_CURRENT_SOURCE_DIR}/grammar.y ${GENERATED_DIR}/grammar.cpp)
+# 源码按教材第 1 章图 1.1 的编译阶段分目录：
+#   src/frontend  词法分析、语法分析、抽象语法树（第 3、4、5、6 章）
+#   src/middle    语义分析和中间代码产生、四元式、类型、符号表、优化（第 7、8、10 章）
+#   src/backend   目标代码生成（第 9 章 / 图 1.1 末端）
+#   src/common    错误输出、字符串转义等公共工具
+set(SOURCE_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set(FRONTEND_DIR ${SOURCE_DIR}/frontend)
+set(MIDDLE_DIR   ${SOURCE_DIR}/middle)
+set(BACKEND_DIR  ${SOURCE_DIR}/backend)
+set(COMMON_DIR   ${SOURCE_DIR}/common)
+
+# bison: frontend/grammar.y -> grammar.cpp + grammar.hpp
+bison_target(Grammar ${FRONTEND_DIR}/grammar.y ${GENERATED_DIR}/grammar.cpp)
 set(BISON_OUTPUT ${GENERATED_DIR}/grammar.cpp)
-# flex: token.l -> token.cpp
-flex_target(Token ${CMAKE_CURRENT_SOURCE_DIR}/token.l ${GENERATED_DIR}/token.cpp)
+# flex: frontend/token.l -> token.cpp
+flex_target(Token ${FRONTEND_DIR}/token.l ${GENERATED_DIR}/token.cpp)
 set(FLEX_OUTPUT ${GENERATED_DIR}/token.cpp)
 
-# 源码按教材第 1 章图 1.1 的模块划分组织：
-#   ASTNodes      抽象语法树（第 6 章）
-#   IntermGen     语义分析和中间代码产生（第 7 章）
-#   Quadruple     中间代码：四元式（第 7 章 7.1.3）
-#   TypeSystem    类型系统（第 7 章 7.7）
-#   SymbolTable   符号表（第 8 章）
-#   Optimizer     中间代码优化（第 10 章）
-#   Backend       目标代码生成（四元式 -> LLVM IR）
-#   ObjGen        目标文件生成（LLVM IR -> .o）
 add_executable(TinyCompiler
-    ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ASTNodes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/IntermGen.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Quadruple.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/TypeSystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/SymbolTable.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Optimizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Backend.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ObjGen.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
+    ${SOURCE_DIR}/main.cpp
+
+    ${FRONTEND_DIR}/ASTNodes.cpp
     ${BISON_OUTPUT}
     ${FLEX_OUTPUT}
+
+    ${MIDDLE_DIR}/IntermGen.cpp
+    ${MIDDLE_DIR}/Quadruple.cpp
+    ${MIDDLE_DIR}/TypeSystem.cpp
+    ${MIDDLE_DIR}/SymbolTable.cpp
+    ${MIDDLE_DIR}/Optimizer.cpp
+
+    ${BACKEND_DIR}/Backend.cpp
+    ${BACKEND_DIR}/ObjGen.cpp
+
+    ${COMMON_DIR}/utils.cpp
 )
 
 target_include_directories(TinyCompiler PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SOURCE_DIR}
+    ${FRONTEND_DIR}
+    ${MIDDLE_DIR}
+    ${BACKEND_DIR}
+    ${COMMON_DIR}
     ${GENERATED_DIR}
     ${LLVM_INCLUDE_DIRS}
 )
