@@ -1,7 +1,5 @@
 #include "ASTNodes.h"
 
-#include "utils.h"
-
 #include <iostream>
 
 std::string OpName(BinOp op) {
@@ -34,26 +32,4 @@ void Node::print(const std::string& prefix) const {
             child->print(nextPrefix);
         }
     }
-}
-
-std::string Node::toJson() const {
-    std::string out = "{\"name\": \"" + JsonEscape(this->label()) + "\"";
-    std::vector<Node*> kids = this->children();
-    if (!kids.empty()) {
-        out += ", \"children\": [";
-        bool first = true;
-        for (Node* child : kids) {
-            if (!child) {
-                continue;
-            }
-            if (!first) {
-                out += ", ";
-            }
-            first = false;
-            out += child->toJson();
-        }
-        out += "]";
-    }
-    out += "}";
-    return out;
 }

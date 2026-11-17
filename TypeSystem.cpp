@@ -4,6 +4,8 @@
 
 #include <llvm/IR/Constants.h>
 
+#include <algorithm>
+
 using namespace llvm;
 
 TypeSystem::TypeSystem(LLVMContext& context) : context_(context) {

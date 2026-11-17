@@ -10,9 +10,6 @@ void LogError(const std::string& msg);
 // 只要有错就不生成目标文件，并以非 0 的退出码结束。
 int ErrorCount();
 
-// JSON 字符串转义（AST 可视化用）
-std::string JsonEscape(const std::string& s);
-
 // 把词法分析器抓到的字符串字面量（两端带引号）转成真正的内容：
 // 去掉引号，并把 \n \t \r \\ \" 这些转义序列还原成本来的字符。
 std::string UnescapeStringLiteral(const std::string& raw);

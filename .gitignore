@@ -24,10 +24,8 @@ y.tab.h
 # 编译器的输出
 output.o
 output.obj
-A_tree.json
 
 # 编辑器
 .idea/
-.vscode/*
-!.vscode/settings.json
+.vscode/
 .DS_Store

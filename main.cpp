@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -30,8 +29,6 @@ void PrintUsage(const char* program) {
         << "  -o <文件>     指定生成的目标文件，默认 output.o\n"
         << "  -S            只生成 LLVM IR（.ll）文件，不生成目标文件\n"
         << "  --ast        同时在屏幕上打印语法树\n"
-        << "  --ast-json <文件>\n"
-        << "                把语法树以 JSON 格式写到文件，默认 visualization/A_tree.json\n"
         << "  --dump-ir    打印中间代码（四元式）\n"
         << "  -h, --help   显示这个帮助信息\n";
 }
@@ -49,7 +46,6 @@ void PrintUsage(const char* program) {
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
     std::string outputFile = "output.o";
-    std::string jsonFile;
     std::string inputFile;
     bool printAst = false;
     bool emitIROnly = false;
@@ -63,8 +59,6 @@ int main(int argc, char** argv) {
             emitIROnly = true;
         } else if (argument == "--ast") {
             printAst = true;
-        } else if (argument == "--ast-json" && i + 1 < argc) {
-            jsonFile = argv[++i];
         } else if (argument == "--dump-ir") {
             dumpIntermediate = true;
         } else if (argument == "-h" || argument == "--help") {
@@ -93,20 +87,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // 语法树可视化：JSON 交给 visualization/ 下的脚本画树
-    if (jsonFile.empty() && printAst) {
-        jsonFile = "visualization/A_tree.json";
-    }
-    if (!jsonFile.empty()) {
-        std::ofstream out(jsonFile);
-        if (out.is_open()) {
-            out << programBlock->toJson();
-            out.close();
-            std::cout << "语法树 JSON 已写入 " << jsonFile << "\n";
-        } else {
-            fprintf(stderr, "error: 无法写入 %s\n", jsonFile.c_str());
-        }
-    }
     if (printAst) {
         programBlock->print("--");
     }

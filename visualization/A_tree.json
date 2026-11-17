@@ -1,1 +1,0 @@
-{"name": "NBlock", "children": [{"name": "NFunctionDeclaration", "children": [{"name": "int"}, {"name": "NIdentifier:main"}, {"name": "NBlock", "children": [{"name": "NVariableDeclaration", "children": [{"name": "int"}, {"name": "NIdentifier:a"}, {"name": "NInteger:1"}]}, {"name": "NReturnStatement", "children": [{"name": "NIdentifier:a"}]}]}]}]}

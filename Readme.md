@@ -132,8 +132,8 @@ cat test.c | ./build/TinyCompiler -o output.o
 # 打印中间代码（四元式），看看语义分析的结果
 ./build/TinyCompiler --dump-ir -S -o output.ll test.c
 
-# 顺便把语法树打印到屏幕、并导出成 JSON
-./build/TinyCompiler --ast --ast-json A_tree.json test.c
+# 把语法树打印到屏幕
+./build/TinyCompiler --ast test.c
 ```
 
 生成的目标文件可以直接链接：
@@ -361,9 +361,7 @@ int main(){
 | --- | --- |
 | `label()` | 节点在树上显示的文本，必须实现 |
 | `children()` | 子节点列表，默认空 |
-| `codeGen()` | 生成 LLVM IR，默认什么都不生成 |
 | `print()` | 打印整棵子树（基类实现） |
-| `toJson()` | 导出 JSON（基类实现） |
 
 所以一个新节点通常只要写十几行：
 
@@ -380,8 +378,8 @@ public:
 };
 ```
 
-`print()` 和 `toJson()` 都基于 `children()` 在基类里实现一次，所以
-**20 个节点类省掉了 200 多行重复代码**。
+`print()` 基于 `children()` 在基类里实现一次，所以 20 个节点类不用各写一遍
+遍历子树的代码。
 
 注意 AST 节点**只有语法、没有语义**，也不依赖 LLVM：翻译成中间代码是
 `IntermGen` 的事（教材第 7 章的语法制导翻译），这样「语法」和「语义」
@@ -403,8 +401,16 @@ public:
     std::string name;              // "int" / "Point"
     std::vector<uint64_t> dims;    // 数组各维长度，空表示不是数组
 
-    bool isArray() const { return !dims.empty(); }
-    uint64_t elementCount() const;  // 各维相乘
+    NTypeRef() = default;
+    explicit NTypeRef(std::string n) : name(std::move(n)) {}
+
+    std::string label() const override {
+        std::string s = name;
+        for (uint64_t d : dims) {
+            s += "[" + std::to_string(d) + "]";
+        }
+        return s;
+    }
 };
 ```
 
@@ -419,19 +425,23 @@ public:
 class Symbol {
 public:
     std::string name;
-    SymbolKind kind;            // 变量 / 函数 / 类型名 / 临时变量 / 常量
+    SymbolKind kind = SymbolKind::Variable; // 变量 / 函数 / 类型名 / 临时变量 / 常量
 
-    std::string typeName;        // 类型：int、Point ...
+    std::string typeName;         // 类型：int、Point ...
     llvm::Type* llvmType = nullptr;
-    std::vector<uint64_t> dims;  // 数组各维长度，空表示不是数组
+    std::vector<uint64_t> dims;   // 数组各维长度，空表示不是数组
 
-    bool hasConstant = false;    // 常量的值，优化器用它做常量折叠
+    bool hasConstant = false;     // 常量的值，优化器用它做常量折叠
+    bool constantIsFloat = false;
     double constantValue = 0.0;
-    std::string stringValue;     // 字符串字面量的内容
 
-    llvm::Value* addr = nullptr; // 存储位置
-    bool isFuncArg = false;
-    Symbol* alias = nullptr;     // 公共子表达式被合并后的别名
+    std::string stringValue;      // 字符串字面量的内容
+    bool isString = false;
+    bool isVariadic = false;      // 外部函数按可变参数处理（printf 这类）
+
+    Symbol* alias = nullptr;      // 公共子表达式被合并后的别名
+
+    bool isArray() const { return !dims.empty(); }
 };
 ```
 
@@ -453,33 +463,24 @@ Symbol* SymbolTable::lookup(const std::string& name) {
 表项放在一个「竞技场」里，**不随作用域退出而销毁**——因为四元式里存的就是
 指向表项的指针（教材第 7 章 7.1.3 的说法），表项必须活得比四元式序列长。
 
-```cpp
-Symbol* CodeGenContext::findSymbol(const std::string& name) {
-    for (auto scope = scopes_.rbegin(); scope != scopes_.rend(); ++scope) {
-        auto it = scope->symbols.find(name);
-        if (it != scope->symbols.end()) {
-            return &it->second;
-        }
-    }
-    return nullptr;
-}
-```
-
 ### 4.4 数组：统一按「首元素指针」处理
 
 数组在 C 里有一个容易忽略的性质：**数组名会退化成指向首元素的指针**。
 
 本项目把这件事显式地存进了符号表：
 
-- 局部数组 `int[13] arr` → 分配 `[13 x i32]`，`addr` 指向首元素
-- 数组形参 `int arr[10]` → 本来就是指针，`addr` 直接用传进来的值
+- 局部数组 `int[13] arr` → 分配 `[13 x i32]`，后端在 `symbolValues_` 里记下首元素指针
+- 数组形参 `int[10] arr` → 本来就是指针，`symbolValues_` 直接记传进来的指针
 
-于是取元素的代码只有一种写法：
+于是取元素的代码只有一种写法（`Backend::translateQuad` 里的 `ArrayRef` 分支）：
 
 ```cpp
-llvm::Value* index = flatIndex(ctx, *symbol, this->exprs);   // 算出下标
-llvm::Value* elementPtr = createGEP(ctx, symbol->type, symbol->addr, {index});
-return ctx.builder.CreateLoad(symbol->type, elementPtr, "elem");
+llvm::Value* base  = addressOf(quad.arg1);    // 数组首元素指针
+llvm::Value* index = valueOf(quad.arg2);      // 已经算好的下标
+llvm::Value* elementPtr = ctx_.builder.CreateInBoundsGEP(
+    quad.arg1->llvmType, base, {index}, "elem");
+llvm::Value* value = ctx_.builder.CreateLoad(
+    quad.result->llvmType, elementPtr, "elem");
 ```
 
 多维数组在内存里展平成一维（和 C 的行主序一致）。下标换算：
@@ -489,16 +490,27 @@ int[2][3][4] cube        →  展平成 [24 x i32]
 cube[i][j][k]            →  下标 = ((i * 3) + j) * 4 + k
 ```
 
-代码里用统一的公式算，因此任意维数都正确：
+代码里用统一的公式算，因此任意维数都正确（`IntermGen::translateArrayIndex`）：
 
 ```cpp
 // 下标 = ((e0 * d1) + e1) * d2 + e2 ...
-Value* result = nullptr;
-for (size_t i = 0; i < exprs.size(); ++i) {
-    Value* element = exprs[i]->codeGen(ctx);
-    if (!result) { result = element; continue; }
-    Value* stride = ConstantInt::get(intType, symbol.dims[i]);
-    result = builder.CreateAdd(builder.CreateMul(result, stride), element);
+Type* intType = types_.typeByName("int");
+Symbol* result = translateExpression(*node.exprs[0]);
+for (size_t i = 1; i < node.exprs.size(); ++i) {
+    Symbol* element = translateExpression(*node.exprs[i]);
+
+    // 这一维的跨度 d_i 是编译期常量，登记成符号表里的常量
+    Symbol* stride = symbols_.newTemporary(SymbolKind::Constant);
+    stride->typeName = "int";
+    stride->llvmType = intType;
+    stride->hasConstant = true;
+    stride->constantValue = static_cast<double>(array.dims[i]);
+
+    Symbol* product = symbols_.newTemporary();
+    emit(QuadOp::Mul, result, stride, product);
+    Symbol* sum = symbols_.newTemporary();
+    emit(QuadOp::Add, product, element, sum);
+    result = sum;
 }
 ```
 
@@ -519,33 +531,41 @@ for (size_t i = 0; i < exprs.size(); ++i) {
 
 ### 4.6 基本块的生成
 
-`if` 语句生成三个基本块：`then` / `else` / `ifcont`（合并块）。
+控制语句的四元式由 `IntermGen::translateStatement` 生成（教材 7.5）。`if`
+翻译成标号和条件跳转：
 
-```cpp
-thenBlock  = BasicBlock::Create(ctx.llvmContext, "then", function);
-elseBlock  = BasicBlock::Create(ctx.llvmContext, "else", function);
-mergeBlock = BasicBlock::Create(ctx.llvmContext, "ifcont", function);
-
-builder.CreateCondBr(condition, thenBlock, elseBlock ? elseBlock : mergeBlock);
-// ... 分别生成 then / else 分支 ...
-builder.CreateBr(mergeBlock);
 ```
+iffalse 条件 → L_else
+... then 分支 ...
+goto L_end
+label L_else
+... else 分支 ...
+label L_end
+```
+
+`Backend::translateQuad` 再把这些四元式变成 LLVM 基本块：
+
+- 遇到 `Label`：先给当前块补一条 `br`（当前块可能还没有终结指令），再切到标号块；
+- 遇到 `JumpIfFalse` / `JumpIfTrue`：创建一个 `cont` 块作为落空分支，
+  生成 `CreateCondBr(test, cont, target)`，然后切到 `cont` 继续翻译。
 
 两个容易踩的坑：
 
-1. **每个分支生成完都要判断当前块有没有终结指令**。如果分支里有 `return`，
-   块已经有终结指令了，再 `CreateBr` 会直接触发 LLVM 的断言。
-2. **合并块要挪到函数块列表的末尾**。分支里如果还有嵌套的 `if`，它们会继续
-   创建新块，不挪一下的话块在列表里的顺序就和执行顺序对不上了。
+1. **每个基本块只能有一条终结指令**。分支里有 `return` 时，块已经有 `ret`，
+   再 `CreateBr` 会直接触发 LLVM 的断言；所以生成跳转前都要检查 `getTerminator()`。
+2. **条件必须是 `i1`**。比较运算的结果是 `int`，进入 `CreateCondBr` 之前
+   要先 `icmp ne 0` 转成布尔。
 
-`for` 循环用的是「旋转后」的经典结构，条件每轮只求值一次：
+`for` 循环的四元式是「旋转后」的经典结构，条件每轮只求值一次：
 
 ```
-entry:      初始化
-            br for.cond
-for.cond:   条件 → br for.body / for.end
-for.body:   循环体 → 递增 → br for.cond
-for.end:
+label L_cond
+条件
+iffalse 条件 → L_end
+循环体
+递增
+goto L_cond
+label L_end
 ```
 
 ### 4.7 目标文件生成
@@ -577,13 +597,14 @@ passManager.run(*context.theModule);
 
 ### 4.8 字符串字面量
 
-字符串字面量在 LLVM 里是一个 `[N x i8]` 的全局常量，要当成 `char*` 用必须
-先取首元素的指针：
+字符串字面量在 LLVM 里是一个 `[N x i8]` 的全局常量。LLVM 15 之后指针是
+opaque pointer，`GlobalVariable*` 可以直接当 `char*` 用，不需要再 GEP 取首元素。
+`Backend::stringConstant` 还会按符号缓存，避免同一个字面量重复生成全局变量：
 
 ```cpp
-llvm::GlobalVariable* global = builder.CreateGlobalString(this->value, "str");
-std::vector<llvm::Value*> indices{zero(ctx), zero(ctx)};
-return createGEP(ctx, global->getValueType(), global, indices);
+llvm::Value* global = ctx_.builder.CreateGlobalString(symbol->stringValue, "str");
+stringGlobals_[symbol] = global;
+return global;
 ```
 
 引号和转义序列在**词法分析阶段**就处理掉（`UnescapeStringLiteral`），
@@ -715,13 +736,15 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 输出：
 
 ```
+[PASS] link_demo
 [PASS] testArray
 [PASS] testBasic
 [PASS] testBugfix
 [PASS] testExtern
+[PASS] testPrecedence
 [PASS] testStruct
 
-通过 5 个，失败 0 个，跳过 0 个
+通过 7 个，失败 0 个，跳过 0 个
 ```
 
 `tests/testBugfix.input` 专门用来锁住那些曾经出过问题的行为，改动代码生成
@@ -794,8 +817,7 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 
 | 问题 | 处理 |
 | --- | --- |
-| 20 个节点类各写一遍 `print()` 和 `jsonGen()` | 抽到基类，子类只提供 `children()` |
-| 依赖 jsoncpp | 换成 40 行手写的 JSON 输出，少一个外部依赖 |
+| 20 个节点类各写一遍 `print()` | 抽到基类，子类只提供 `children()` |
 | 作用域里 4 张并行的 map | 合并成一张 `Symbol` 表 |
 | `shared_ptr<vector>` | 直接用 `vector` |
 | 类型信息混在 `NIdentifier` 里 | 拆出独立的 `NTypeRef` |

@@ -5,36 +5,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 
-#include <algorithm>
-
 using namespace llvm;
-
-namespace {
-
-// 两个操作数的类型统一：
-//   只要有一边是浮点，两边都提升到 double
-//   两边都是整数时统一到较宽的那个（至少 32 位）
-Type* unifyTypes(Type* left, Type* right) {
-    if (!left || !right) {
-        return left ? left : right;
-    }
-    if (left == right) {
-        return left;
-    }
-    if (left->isFloatingPointTy() || right->isFloatingPointTy()) {
-        return Type::getDoubleTy(left->getContext());
-    }
-    if (left->isIntegerTy() && right->isIntegerTy()) {
-        unsigned width = std::max(left->getIntegerBitWidth(), right->getIntegerBitWidth());
-        if (width < 32) {
-            width = 32;
-        }
-        return Type::getIntNTy(left->getContext(), width);
-    }
-    return left;
-}
-
-} // namespace
 
 IntermGen::IntermGen(SymbolTable& symbols, TypeSystem& types)
     : symbols_(symbols), types_(types) {}
@@ -127,7 +98,7 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
         if (!left || !right) {
             return nullptr;
         }
-        Type* unified = unifyTypes(left->llvmType, right->llvmType);
+        Type* unified = types_.unify(left->llvmType, right->llvmType);
 
         Symbol* temp = symbols_.newTemporary();
         switch (n->op) {

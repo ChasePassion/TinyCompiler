@@ -21,8 +21,6 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/Triple.h>
 
-#include "utils.h"
-
 #include <memory>
 #include <optional>
 
