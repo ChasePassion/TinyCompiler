@@ -29,49 +29,59 @@ message(STATUS "使用 flex ${FLEX_VERSION} (${FLEX_EXECUTABLE})")
 set(GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
-# 源码按教材第 1 章图 1.1 的编译阶段分目录：
-#   src/frontend  词法分析、语法分析、抽象语法树（第 3、4、5、6 章）
-#   src/middle    语义分析和中间代码产生、四元式、类型、符号表、优化（第 7、8、10 章）
-#   src/backend   目标代码生成（第 9 章 / 图 1.1 末端）
-#   src/common    错误输出、字符串转义等公共工具
-set(SOURCE_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/src)
-set(FRONTEND_DIR ${SOURCE_DIR}/frontend)
-set(MIDDLE_DIR   ${SOURCE_DIR}/middle)
-set(BACKEND_DIR  ${SOURCE_DIR}/backend)
-set(COMMON_DIR   ${SOURCE_DIR}/common)
+# 源码按教材第 1 章图 1.1「编译程序总框」的编译流程分目录：
+#   src/01_lexical_analysis   词法分析（第 3 章）
+#   src/02_syntax_analysis    语法分析和抽象语法树（第 4、5、6 章）
+#   src/03_semantic_analysis  语义分析和中间代码产生（第 7 章）
+#   src/04_optimization       中间代码优化（第 10 章）
+#   src/05_code_generation    目标代码生成（第 9、11 章）
+#   src/symbol_table          符号表（第 8 章，表格管理）
+#   src/support               出错处理和公共工具
+set(SOURCE_DIR       ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set(LEXICAL_DIR      ${SOURCE_DIR}/01_lexical_analysis)
+set(SYNTAX_DIR       ${SOURCE_DIR}/02_syntax_analysis)
+set(SEMANTIC_DIR     ${SOURCE_DIR}/03_semantic_analysis)
+set(OPTIMIZER_DIR    ${SOURCE_DIR}/04_optimization)
+set(CODE_GEN_DIR     ${SOURCE_DIR}/05_code_generation)
+set(SYMBOL_TABLE_DIR ${SOURCE_DIR}/symbol_table)
+set(SUPPORT_DIR      ${SOURCE_DIR}/support)
 
-# bison: frontend/grammar.y -> grammar.cpp + grammar.hpp
-bison_target(Grammar ${FRONTEND_DIR}/grammar.y ${GENERATED_DIR}/grammar.cpp)
+# bison: 02_syntax_analysis/grammar.y -> grammar.cpp + grammar.hpp
+bison_target(Grammar ${SYNTAX_DIR}/grammar.y ${GENERATED_DIR}/grammar.cpp)
 set(BISON_OUTPUT ${GENERATED_DIR}/grammar.cpp)
-# flex: frontend/token.l -> token.cpp
-flex_target(Token ${FRONTEND_DIR}/token.l ${GENERATED_DIR}/token.cpp)
+# flex: 01_lexical_analysis/token.l -> token.cpp
+flex_target(Token ${LEXICAL_DIR}/token.l ${GENERATED_DIR}/token.cpp)
 set(FLEX_OUTPUT ${GENERATED_DIR}/token.cpp)
 
 add_executable(TinyCompiler
     ${SOURCE_DIR}/main.cpp
 
-    ${FRONTEND_DIR}/ASTNodes.cpp
+    ${SYNTAX_DIR}/ASTNodes.cpp
     ${BISON_OUTPUT}
     ${FLEX_OUTPUT}
 
-    ${MIDDLE_DIR}/IntermGen.cpp
-    ${MIDDLE_DIR}/Quadruple.cpp
-    ${MIDDLE_DIR}/TypeSystem.cpp
-    ${MIDDLE_DIR}/SymbolTable.cpp
-    ${MIDDLE_DIR}/Optimizer.cpp
+    ${SEMANTIC_DIR}/IntermGen.cpp
+    ${SEMANTIC_DIR}/Quadruple.cpp
+    ${SEMANTIC_DIR}/TypeSystem.cpp
 
-    ${BACKEND_DIR}/Backend.cpp
-    ${BACKEND_DIR}/ObjGen.cpp
+    ${SYMBOL_TABLE_DIR}/SymbolTable.cpp
+    ${OPTIMIZER_DIR}/Optimizer.cpp
 
-    ${COMMON_DIR}/utils.cpp
+    ${CODE_GEN_DIR}/Backend.cpp
+    ${CODE_GEN_DIR}/ObjGen.cpp
+
+    ${SUPPORT_DIR}/utils.cpp
 )
 
 target_include_directories(TinyCompiler PRIVATE
     ${SOURCE_DIR}
-    ${FRONTEND_DIR}
-    ${MIDDLE_DIR}
-    ${BACKEND_DIR}
-    ${COMMON_DIR}
+    ${LEXICAL_DIR}
+    ${SYNTAX_DIR}
+    ${SEMANTIC_DIR}
+    ${OPTIMIZER_DIR}
+    ${CODE_GEN_DIR}
+    ${SYMBOL_TABLE_DIR}
+    ${SUPPORT_DIR}
     ${GENERATED_DIR}
     ${LLVM_INCLUDE_DIRS}
 )

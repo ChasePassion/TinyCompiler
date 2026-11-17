@@ -198,33 +198,36 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 
 ## 2. 源码结构
 
-整个项目按教材《程序设计语言编译原理》（陈火旺等）的编译阶段组织，
-源码放在 `src/frontend`、`src/middle`、`src/backend` 三个目录，
-公共工具放在 `src/common`：
+整个项目按教材《程序设计语言编译原理》（陈火旺等）第 1 章图 1.1
+「编译程序总框」的流程组织。`src/01` 到 `src/05` 就是流水线上的五个阶段，
+符号表和出错处理是贯穿整个流程的辅助模块：
 
 ```
 TinyCompiler/
 ├── src/
-│   ├── frontend/                词法分析、语法分析、抽象语法树（第 3、4、5、6 章）
-│   │   ├── token.l              词法规则（LEX / flex）
-│   │   ├── grammar.y            语法规则（YACC / bison，LALR(1) 分析表）
-│   │   └── ASTNodes.h / .cpp    抽象语法树，只描述语法，不含语义
-│   ├── middle/                  语义分析和中间代码产生（第 7、8、10 章）
-│   │   ├── IntermGen.h / .cpp   语法树 → 四元式
-│   │   ├── Quadruple.h / .cpp   中间语言：四元式（7.1.3）
-│   │   ├── TypeSystem.h / .cpp  类型系统和类型检查（7.7）
-│   │   ├── SymbolTable.h / .cpp 符号表（第 8 章）
-│   │   └── Optimizer.h / .cpp   中间代码优化（第 10 章）
-│   ├── backend/                 目标代码生成（第 9 章）
-│   │   ├── Backend.h / .cpp     四元式 → LLVM IR
-│   │   └── ObjGen.h / .cpp      LLVM IR → .o
-│   ├── common/                  公共工具
-│   │   └── utils.h / .cpp       错误输出、字符串转义
-│   └── main.cpp                 程序入口（第 1 章图 1.1 编译程序总框）
-├── tests/                       测试用例和测试脚本
-├── CMakeLists.txt               构建脚本
-├── Makefile                     CMake 的 Make 包装
-├── build.ps1                    Windows 一键构建
+│   ├── 01_lexical_analysis/       词法分析（第 3 章）
+│   │   └── token.l                词法规则（LEX / flex）
+│   ├── 02_syntax_analysis/        语法分析 + 抽象语法树（第 4、5、6 章）
+│   │   ├── grammar.y              语法规则（YACC / bison，LALR(1) 分析表）
+│   │   └── ASTNodes.h / .cpp      语法分析的输出，也是语义分析的输入
+│   ├── 03_semantic_analysis/      语义分析和中间代码产生（第 7 章）
+│   │   ├── IntermGen.h / .cpp     语法树 → 四元式
+│   │   ├── Quadruple.h / .cpp     中间语言：四元式（7.1.3）
+│   │   └── TypeSystem.h / .cpp    类型系统和类型检查（7.7）
+│   ├── 04_optimization/           中间代码优化（第 10 章）
+│   │   └── Optimizer.h / .cpp
+│   ├── 05_code_generation/        目标代码生成（第 9、11 章）
+│   │   ├── Backend.h / .cpp       四元式 → LLVM IR
+│   │   └── ObjGen.h / .cpp        LLVM IR → .o
+│   ├── symbol_table/              符号表（第 8 章，表格管理）
+│   │   └── SymbolTable.h / .cpp
+│   ├── support/                   出错处理和公共工具
+│   │   └── utils.h / .cpp
+│   └── main.cpp                   程序入口（第 1 章图 1.1 编译程序总框）
+├── tests/                         测试用例和测试脚本
+├── CMakeLists.txt                 构建脚本
+├── Makefile                       CMake 的 Make 包装
+├── build.ps1                      Windows 一键构建
 └── Readme.md
 ```
 
@@ -233,14 +236,15 @@ TinyCompiler/
 | 教材 | 章节 | 本项目 |
 | --- | --- | --- |
 | 第 1 章 | 编译程序总框 | `src/main.cpp` |
-| 第 2 章 | 高级语言基础 | `src/middle/TypeSystem.h` 里的类型定义 |
-| 第 3 章 | 词法分析（正规式 → DFA → LEX） | `src/frontend/token.l` |
-| 第 4、5 章 | 语法分析（LR / LALR，YACC） | `src/frontend/grammar.y` |
-| 第 6 章 | 抽象语法树 | `src/frontend/ASTNodes.h` |
-| 第 7 章 | 语义分析和中间代码产生 | `src/middle/IntermGen.cpp`、`Quadruple.cpp`、`TypeSystem.cpp` |
-| 第 8 章 | 符号表 | `src/middle/SymbolTable.cpp` |
-| 第 9 章 | 运行时存储空间组织 | `src/backend/Backend.cpp` 里的地址分配 |
-| 第 10 章 | 中间代码优化 | `src/middle/Optimizer.cpp` |
+| 第 2 章 | 高级语言基础 | `src/03_semantic_analysis/TypeSystem.h` 里的类型定义 |
+| 第 3 章 | 词法分析（正规式 → DFA → LEX） | `src/01_lexical_analysis/token.l` |
+| 第 4、5 章 | 语法分析（LR / LALR，YACC） | `src/02_syntax_analysis/grammar.y` |
+| 第 6 章 | 抽象语法树 | `src/02_syntax_analysis/ASTNodes.h` |
+| 第 7 章 | 语义分析和中间代码产生 | `src/03_semantic_analysis/IntermGen.cpp`、`Quadruple.cpp`、`TypeSystem.cpp` |
+| 第 8 章 | 符号表 | `src/symbol_table/SymbolTable.cpp` |
+| 第 9 章 | 运行时存储空间组织 | `src/05_code_generation/Backend.cpp` 里的地址分配 |
+| 第 10 章 | 中间代码优化 | `src/04_optimization/Optimizer.cpp` |
+| 第 11 章 | 目标代码生成 | `src/05_code_generation/Backend.cpp`、`ObjGen.cpp` |
 
 ### 编译流程
 
