@@ -2,18 +2,12 @@
 
 #include "utils.h"
 
-#include <llvm/IR/Constants.h>
-
 #include <algorithm>
 
 using namespace llvm;
 
 TypeSystem::TypeSystem(LLVMContext& context) : context_(context) {
     builtins_["int"]    = Type::getInt32Ty(context);
-    builtins_["float"]  = Type::getFloatTy(context);
-    builtins_["double"] = Type::getDoubleTy(context);
-    builtins_["char"]   = Type::getInt8Ty(context);
-    builtins_["bool"]   = Type::getInt1Ty(context);
     builtins_["string"] = PointerType::getUnqual(Type::getInt8Ty(context));
     builtins_["void"]   = Type::getVoidTy(context);
 }
@@ -35,42 +29,14 @@ Value* TypeSystem::cast(Value* value, Type* targetType, IRBuilder<>& builder) {
         return value;
     }
 
-    // 整数 -> 整数
+    // 整数 -> 整数：位宽变窄用 trunc，变宽用 sext
     if (from->isIntegerTy() && targetType->isIntegerTy()) {
-        if (targetType->isIntegerTy(1)) {
-            // 转成 bool：非 0 即为真。
-            // 注意不能直接截断成 1 位，那样 2 会变成 0（假）。
-            return builder.CreateICmpNE(value, ConstantInt::get(from, 0), "tobool");
-        }
         unsigned fromBits = from->getIntegerBitWidth();
         unsigned toBits = targetType->getIntegerBitWidth();
         if (fromBits > toBits) {
             return builder.CreateTrunc(value, targetType, "cast");
         }
         return builder.CreateSExt(value, targetType, "cast");
-    }
-
-    // 整数 -> 浮点
-    if (from->isIntegerTy() && targetType->isFloatingPointTy()) {
-        return builder.CreateSIToFP(value, targetType, "cast");
-    }
-
-    // 浮点 -> 整数
-    if (from->isFloatingPointTy() && targetType->isIntegerTy()) {
-        return builder.CreateFPToSI(value, targetType, "cast");
-    }
-
-    // 浮点 -> 浮点
-    if (from->isFloatingPointTy() && targetType->isFloatingPointTy()) {
-        bool fromIsDouble = (from == builtins_["double"]);
-        bool toIsDouble = (targetType == builtins_["double"]);
-        if (fromIsDouble && !toIsDouble) {
-            return builder.CreateFPTrunc(value, targetType, "cast");
-        }
-        if (!fromIsDouble && toIsDouble) {
-            return builder.CreateFPExt(value, targetType, "cast");
-        }
-        return value;
     }
 
     LogError("无法把 " + DescribeType(from) + " 转换成 " + DescribeType(targetType));
@@ -83,9 +49,6 @@ Type* TypeSystem::unify(Type* left, Type* right) const {
     }
     if (left == right) {
         return left;
-    }
-    if (left->isFloatingPointTy() || right->isFloatingPointTy()) {
-        return Type::getDoubleTy(context_);
     }
     if (left->isIntegerTy() && right->isIntegerTy()) {
         unsigned width = std::max(left->getIntegerBitWidth(), right->getIntegerBitWidth());
@@ -103,13 +66,9 @@ std::string DescribeType(Type* type) {
     }
     switch (type->getTypeID()) {
     case Type::VoidTyID:    return "void";
-    case Type::HalfTyID:    return "half";
-    case Type::FloatTyID:   return "float";
-    case Type::DoubleTyID:  return "double";
     case Type::IntegerTyID: return "int" + std::to_string(type->getIntegerBitWidth());
     case Type::PointerTyID: return "pointer";
     case Type::ArrayTyID:   return "array";
-    case Type::StructTyID:  return type->getStructName().str();
     default:                return "unknown";
     }
 }

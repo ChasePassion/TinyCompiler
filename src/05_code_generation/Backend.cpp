@@ -94,11 +94,7 @@ void Backend::generateFunction(const FunctionCode& function) {
             continue;
         }
         if (local->isArray()) {
-            uint64_t count = 1;
-            for (uint64_t dimension : local->dims) {
-                count *= dimension;
-            }
-            Type* arrayType = ArrayType::get(local->llvmType, count);
+            Type* arrayType = ArrayType::get(local->llvmType, local->arraySize);
             Value* slot = ctx_.builder.CreateAlloca(arrayType, nullptr,
                                                     local->name.c_str());
             // 数组变量保存首元素的指针，等价于 C 里数组退化成的指针
@@ -194,16 +190,11 @@ void Backend::translateQuad(const Quadruple& quad) {
         right = ctx_.typeSystem.cast(right, target, ctx_.builder);
 
         Value* value = nullptr;
-        bool isFloat = target->isFloatingPointTy();
         switch (quad.op) {
-        case QuadOp::Add:  value = isFloat ? ctx_.builder.CreateFAdd(left, right, "add")
-                                           : ctx_.builder.CreateAdd(left, right, "add"); break;
-        case QuadOp::Sub:  value = isFloat ? ctx_.builder.CreateFSub(left, right, "sub")
-                                           : ctx_.builder.CreateSub(left, right, "sub"); break;
-        case QuadOp::Mul:  value = isFloat ? ctx_.builder.CreateFMul(left, right, "mul")
-                                           : ctx_.builder.CreateMul(left, right, "mul"); break;
-        case QuadOp::Div:  value = isFloat ? ctx_.builder.CreateFDiv(left, right, "div")
-                                           : ctx_.builder.CreateSDiv(left, right, "div"); break;
+        case QuadOp::Add:  value = ctx_.builder.CreateAdd(left, right, "add"); break;
+        case QuadOp::Sub:  value = ctx_.builder.CreateSub(left, right, "sub"); break;
+        case QuadOp::Mul:  value = ctx_.builder.CreateMul(left, right, "mul"); break;
+        case QuadOp::Div:  value = ctx_.builder.CreateSDiv(left, right, "div"); break;
         case QuadOp::Mod:  value = ctx_.builder.CreateSRem(left, right, "mod"); break;
         default: break;
         }
@@ -237,20 +228,13 @@ void Backend::translateQuad(const Quadruple& quad) {
         right = ctx_.typeSystem.cast(right, target, ctx_.builder);
 
         Value* comparison = nullptr;
-        bool isFloat = target->isFloatingPointTy();
         switch (quad.op) {
-        case QuadOp::Lt: comparison = isFloat ? ctx_.builder.CreateFCmpOLT(left, right, "cmp")
-                                             : ctx_.builder.CreateICmpSLT(left, right, "cmp"); break;
-        case QuadOp::Le: comparison = isFloat ? ctx_.builder.CreateFCmpOLE(left, right, "cmp")
-                                             : ctx_.builder.CreateICmpSLE(left, right, "cmp"); break;
-        case QuadOp::Gt: comparison = isFloat ? ctx_.builder.CreateFCmpOGT(left, right, "cmp")
-                                             : ctx_.builder.CreateICmpSGT(left, right, "cmp"); break;
-        case QuadOp::Ge: comparison = isFloat ? ctx_.builder.CreateFCmpOGE(left, right, "cmp")
-                                             : ctx_.builder.CreateICmpSGE(left, right, "cmp"); break;
-        case QuadOp::Eq: comparison = isFloat ? ctx_.builder.CreateFCmpOEQ(left, right, "cmp")
-                                             : ctx_.builder.CreateICmpEQ(left, right, "cmp"); break;
-        case QuadOp::Ne: comparison = isFloat ? ctx_.builder.CreateFCmpONE(left, right, "cmp")
-                                             : ctx_.builder.CreateICmpNE(left, right, "cmp"); break;
+        case QuadOp::Lt: comparison = ctx_.builder.CreateICmpSLT(left, right, "cmp"); break;
+        case QuadOp::Le: comparison = ctx_.builder.CreateICmpSLE(left, right, "cmp"); break;
+        case QuadOp::Gt: comparison = ctx_.builder.CreateICmpSGT(left, right, "cmp"); break;
+        case QuadOp::Ge: comparison = ctx_.builder.CreateICmpSGE(left, right, "cmp"); break;
+        case QuadOp::Eq: comparison = ctx_.builder.CreateICmpEQ(left, right, "cmp"); break;
+        case QuadOp::Ne: comparison = ctx_.builder.CreateICmpNE(left, right, "cmp"); break;
         default: break;
         }
         if (comparison) {
@@ -373,13 +357,8 @@ llvm::Value* Backend::valueOf(Symbol* symbol) {
     }
     // 常量：编译期就知道的值
     if (symbol->hasConstant) {
-        if (symbol->constantIsFloat) {
-            return llvm::ConstantFP::get(symbol->llvmType, symbol->constantValue);
-        }
         return llvm::ConstantInt::get(symbol->llvmType,
-                                      static_cast<uint64_t>(
-                                          static_cast<int64_t>(symbol->constantValue)),
-                                      true);
+                                      static_cast<uint64_t>(symbol->constantValue), true);
     }
     // 字符串常量
     if (symbol->kind == SymbolKind::Constant && symbol->isString) {

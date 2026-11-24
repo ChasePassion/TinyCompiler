@@ -3,7 +3,6 @@
 #include "utils.h"
 
 #include <algorithm>
-#include <cmath>
 #include <map>
 #include <sstream>
 
@@ -44,16 +43,16 @@ bool Optimizer::isComputable(QuadOp op) {
     }
 }
 
-double Optimizer::compute(QuadOp op, const Symbol* left, const Symbol* right) {
-    double a = left->constantValue;
-    double b = right->constantValue;
+int64_t Optimizer::compute(QuadOp op, const Symbol* left, const Symbol* right) {
+    int64_t a = left->constantValue;
+    int64_t b = right->constantValue;
 
     switch (op) {
     case QuadOp::Add: return a + b;
     case QuadOp::Sub: return a - b;
     case QuadOp::Mul: return a * b;
     case QuadOp::Div: return b == 0 ? 0 : a / b;
-    case QuadOp::Mod: return b == 0 ? 0 : std::fmod(a, b);
+    case QuadOp::Mod: return b == 0 ? 0 : a % b;
     // 比较运算的结果是 0 或 1
     case QuadOp::Lt: return (a < b) ? 1 : 0;
     case QuadOp::Le: return (a <= b) ? 1 : 0;
@@ -80,8 +79,6 @@ bool Optimizer::foldConstants(FunctionCode& function) {
         // 结果写进符号表，后面用到这个符号的地方就都知道它的值了
         // —— 这就是常量传播。
         quad.result->hasConstant = true;
-        quad.result->constantIsFloat = quad.result->llvmType &&
-                                      quad.result->llvmType->isFloatingPointTy();
         quad.result->constantValue = compute(quad.op, quad.arg1, quad.arg2);
         changed = true;
         return true;   // 这条四元式不用了

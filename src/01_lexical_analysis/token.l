@@ -41,13 +41,12 @@ int currentLine = 1;
 "return"                return TOKEN(TRETURN);
 "for"                   return TOKEN(TFOR);
 "while"                 return TOKEN(TWHILE);
-"int"|"double"|"float"|"char"|"bool"|"string"|"void" {
+"int"|"string"|"void"   {
                            // 内置类型名统一用 TTYPENAME，具体哪种类型由名字决定
                            SAVE_TOKEN; return TTYPENAME;
                          }
 "extern"                SAVE_TOKEN; return TEXTERN;
 [a-zA-Z_][a-zA-Z0-9_]*   SAVE_TOKEN; return TIDENTIFIER;
-[0-9]+\.[0-9]*          SAVE_TOKEN; return TDOUBLE;
 [0-9]+                  SAVE_TOKEN; return TINTEGER;
 \"(\\.|[^"])*\"         {
                            // 去掉两端的引号并处理转义，yylval 里放的是真正的内容

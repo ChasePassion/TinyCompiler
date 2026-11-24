@@ -34,7 +34,7 @@ private:
     void translateStatement(NStatement& node);
     // 函数的翻译
     void translateFunction(NFunctionDeclaration& node);
-    // 多维数组的下标换算
+    // 数组元素的下标
     Symbol* translateArrayIndex(NArrayIndex& node, Symbol& array);
 
     // 新建一个标号（教材 7.5 控制语句的翻译里用）

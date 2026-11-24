@@ -2,7 +2,6 @@
 
 #include "utils.h"
 
-#include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 
 using namespace llvm;
@@ -45,17 +44,6 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
         symbol->typeName = "int";
         symbol->llvmType = types_.typeByName("int");
         symbol->hasConstant = true;
-        symbol->constantIsFloat = false;
-        symbol->constantValue = static_cast<double>(n->value);
-        return symbol;
-    }
-
-    if (auto* n = dynamic_cast<NDouble*>(&node)) {
-        Symbol* symbol = symbols_.newTemporary(SymbolKind::Constant);
-        symbol->typeName = "double";
-        symbol->llvmType = types_.typeByName("double");
-        symbol->hasConstant = true;
-        symbol->constantIsFloat = true;
         symbol->constantValue = n->value;
         return symbol;
     }
@@ -112,7 +100,7 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
         case OP_EQ: temp->llvmType = types_.typeByName("int"); emit(QuadOp::Eq, left, right, temp); break;
         case OP_NE: temp->llvmType = types_.typeByName("int"); emit(QuadOp::Ne, left, right, temp); break;
         }
-        temp->typeName = (temp->llvmType == types_.typeByName("double")) ? "double" : "int";
+        temp->typeName = "int";
         return temp;
     }
 
@@ -206,43 +194,13 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
     return nullptr;
 }
 
-// 多维数组的下标换算：((e0 * d1) + e1) * d2 + e2 ...
+// 数组元素的下标（教材 7.3.2，数组只支持一维）
 Symbol* IntermGen::translateArrayIndex(NArrayIndex& node, Symbol& array) {
-    if (node.exprs.size() != array.dims.size()) {
-        LogError("数组 " + array.name + " 的下标个数和数组维度对不上");
+    if (!array.isArray()) {
+        LogError("变量 " + array.name + " 不是数组");
         return nullptr;
     }
-    Type* intType = types_.typeByName("int");
-
-    Symbol* result = nullptr;
-    for (size_t i = 0; i < node.exprs.size(); ++i) {
-        Symbol* element = translateExpression(*node.exprs[i]);
-        if (!element) {
-            return nullptr;
-        }
-        if (!result) {
-            result = element;
-            continue;
-        }
-        // result = result * dims[i] + element
-        Symbol* stride = symbols_.newTemporary(SymbolKind::Constant);
-        stride->typeName = "int";
-        stride->llvmType = intType;
-        stride->hasConstant = true;
-        stride->constantValue = static_cast<double>(array.dims[i]);
-
-        Symbol* product = symbols_.newTemporary();
-        product->typeName = "int";
-        product->llvmType = intType;
-        emit(QuadOp::Mul, result, stride, product);
-
-        Symbol* sum = symbols_.newTemporary();
-        sum->typeName = "int";
-        sum->llvmType = intType;
-        emit(QuadOp::Add, product, element, sum);
-        result = sum;
-    }
-    return result;
+    return translateExpression(*node.index);
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +213,7 @@ void IntermGen::translateStatement(NStatement& node) {
         Symbol* symbol = symbols_.define(n->id->name, SymbolKind::Variable);
         symbol->typeName = n->type->name;
         symbol->llvmType = types_.typeByName(n->type->name);
-        symbol->dims = n->type->dims;
+        symbol->arraySize = n->type->arraySize;
         if (!symbol->llvmType) {
             LogError("未知的类型：" + n->type->name);
             return;
@@ -291,7 +249,7 @@ void IntermGen::translateStatement(NStatement& node) {
             index->typeName = "int";
             index->llvmType = intType;
             index->hasConstant = true;
-            index->constantValue = static_cast<double>(i);
+            index->constantValue = static_cast<int64_t>(i);
             emit(QuadOp::ArraySet, value, index, variable);
         }
         return;
@@ -398,7 +356,7 @@ void IntermGen::translateFunction(NFunctionDeclaration& node) {
         Symbol* symbol = symbols_.define(parameter->id->name, SymbolKind::Variable);
         symbol->typeName = parameter->type->name;
         symbol->llvmType = types_.typeByName(parameter->type->name);
-        symbol->dims = parameter->type->dims;
+        symbol->arraySize = parameter->type->arraySize;
         code.params.push_back(symbol);
     }
 

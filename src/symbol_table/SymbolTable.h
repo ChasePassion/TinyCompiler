@@ -4,6 +4,7 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -36,13 +37,12 @@ public:
     std::string typeName;
     llvm::Type* llvmType = nullptr;
 
-    // 数组各维长度；为空表示不是数组
-    std::vector<uint64_t> dims;
+    // 数组长度；0 表示不是数组
+    uint64_t arraySize = 0;
 
-    // 字面量常量的值。优化器用它做常量折叠和常量传播（教材第 10 章）。
+    // 常量的值。优化器用它做常量折叠和常量传播（教材第 10 章）。
     bool hasConstant = false;
-    bool constantIsFloat = false;
-    double constantValue = 0.0;
+    int64_t constantValue = 0;
 
     // 字符串字面量的内容
     std::string stringValue;
@@ -55,7 +55,7 @@ public:
     // 别名：公共子表达式被合并后，这个符号指向原来那个符号
     Symbol* alias = nullptr;
 
-    bool isArray() const { return !dims.empty(); }
+    bool isArray() const { return arraySize > 0; }
 };
 
 // 符号表：按作用域组织成一条链

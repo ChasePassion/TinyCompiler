@@ -12,8 +12,7 @@
 // 类型系统：维护「源语言类型名」到「LLVM 类型」的对应关系，以及隐式转换规则。
 //
 // 源语言支持的内置类型：
-//   int(32 位有符号整数) float(单精度) double(双精度)
-//   char(8 位整数) bool(1 位) string(char*) void
+//   int(32 位有符号整数) string(char*) void
 class TypeSystem {
 public:
     explicit TypeSystem(llvm::LLVMContext& context);
@@ -25,7 +24,6 @@ public:
     llvm::Value* cast(llvm::Value* value, llvm::Type* targetType, llvm::IRBuilder<>& builder);
 
     // 两个类型的统一（教材 7.7 类型检查）：
-    //   只要有一边是浮点，统一成 double
     //   两边都是整数时，统一到较宽的那个（至少 32 位）
     llvm::Type* unify(llvm::Type* left, llvm::Type* right) const;
 

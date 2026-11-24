@@ -44,23 +44,25 @@ public:
 // ---------------------------------------------------------------------------
 // 类型引用
 //
-// int / double / float / char / bool / string / void
-// int[3][4]
+// int / string / void
+// int[3]
 //
-// 数组维度存放在这里，变量本身（NIdentifier）不再需要 isType / isArray 标志位。
+// 数组长度存放在这里，变量本身（NIdentifier）不再需要 isType / isArray 标志位。
 // ---------------------------------------------------------------------------
 class NTypeRef : public Node {
 public:
     std::string name;              // 类型名
-    std::vector<uint64_t> dims;    // 数组各维长度；为空表示不是数组
+    uint64_t arraySize = 0;        // 数组长度；0 表示不是数组
 
     NTypeRef() = default;
     explicit NTypeRef(std::string n) : name(std::move(n)) {}
 
+    bool isArray() const { return arraySize > 0; }
+
     std::string label() const override {
         std::string s = name;
-        for (uint64_t d : dims) {
-            s += "[" + std::to_string(d) + "]";
+        if (isArray()) {
+            s += "[" + std::to_string(arraySize) + "]";
         }
         return s;
     }
@@ -84,19 +86,6 @@ public:
 
     std::string label() const override {
         return "NInteger:" + std::to_string(value);
-    }
-};
-
-// 浮点字面量
-class NDouble : public NExpression {
-public:
-    double value = 0.0;
-
-    NDouble() = default;
-    explicit NDouble(double v) : value(v) {}
-
-    std::string label() const override {
-        return "NDouble:" + std::to_string(value);
     }
 };
 
@@ -182,24 +171,19 @@ public:
     }
 };
 
-// 数组元素 arr[i][j]
+// 数组元素 arr[i]
 class NArrayIndex : public NExpression {
 public:
     std::shared_ptr<NIdentifier> arrayName;
-    std::vector<std::shared_ptr<NExpression>> exprs;
+    std::shared_ptr<NExpression> index;
 
     NArrayIndex() = default;
-    NArrayIndex(std::shared_ptr<NIdentifier> n, std::vector<std::shared_ptr<NExpression>> e)
-        : arrayName(std::move(n)), exprs(std::move(e)) {}
+    NArrayIndex(std::shared_ptr<NIdentifier> n, std::shared_ptr<NExpression> i)
+        : arrayName(std::move(n)), index(std::move(i)) {}
 
     std::string label() const override { return "NArrayIndex"; }
     std::vector<Node*> children() const override {
-        std::vector<Node*> out;
-        out.push_back(arrayName.get());
-        for (auto& e : exprs) {
-            out.push_back(e.get());
-        }
-        return out;
+        return {arrayName.get(), index.get()};
     }
 };
 

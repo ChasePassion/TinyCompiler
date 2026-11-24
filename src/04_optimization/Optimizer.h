@@ -4,6 +4,8 @@
 #include "Quadruple.h"
 #include "SymbolTable.h"
 
+#include <cstdint>
+
 // ---------------------------------------------------------------------------
 // 教材第 10 章：中间代码优化
 //
@@ -39,7 +41,7 @@ private:
     // 一个算式是不是可以折叠的
     static bool isComputable(QuadOp op);
     // 算出两个常量的结果
-    static double compute(QuadOp op, const Symbol* left, const Symbol* right);
+    static int64_t compute(QuadOp op, const Symbol* left, const Symbol* right);
 
     SymbolTable& symbols_;
 };

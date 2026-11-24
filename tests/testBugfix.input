@@ -42,29 +42,7 @@ int truthy(int n){
     return 0
 }
 
-# 5. 三维数组的下标换算
-int arrays(){
-    int[2][3][4] cube
-    int i
-    int j
-    int k
-    for(i=0; i<2; i=i+1){
-        for(j=0; j<3; j=j+1){
-            for(k=0; k<4; k=k+1){
-                cube[i][j][k] = i * 100 + j * 10 + k
-            }
-        }
-    }
-    return cube[1][2][3]
-}
-
-# 6. 浮点运算
-double half(){
-    double x = 5.0
-    return x / 2.0
-}
-
-# 7. 调用后面才定义的函数
+# 5. 调用后面才定义的函数
 int later(int v){
     return v * 2
 }
@@ -76,8 +54,6 @@ int main(){
     printf("modulo=%d\n", modulo())
     printf("truthy(2)=%d\n", truthy(2))
     printf("truthy(0)=%d\n", truthy(0))
-    printf("arrays=%d\n", arrays())
-    printf("half=%f\n", half())
     printf("later(21)=%d\n", later(21))
     return 0
 }

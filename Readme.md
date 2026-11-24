@@ -187,8 +187,8 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | 用例 | 覆盖的东西 |
 | --- | --- |
 | `testBasic` | 函数定义与调用、if/else 链、for 循环、变参外部函数 |
-| `testArray` | 一维/二维数组、数组初始化、数组下标 |
-| `testExtern` | 外部函数声明、浮点格式化输出 |
+| `testArray` | 一维数组、数组初始化、数组下标 |
+| `testExtern` | 外部函数声明、变参格式化输出 |
 | `testBugfix` | 专门锁住那些曾经出过问题的行为（见第 6 节） |
 | `testPrecedence` | 运算符优先级和结合性 |
 | `link_demo` | TinyCompiler 编译的函数和普通 C++ 代码链接在一起 |
@@ -292,8 +292,8 @@ TinyCompiler/
 - 数组初始化用中括号而不是大括号：`int[3] a = [1, 2, 3]`
 - 强制要求写 `return`
 
-支持的数据类型：`void` `int` `float` `double` `char` `bool` `string`。
-数组支持多维。
+支持的数据类型：`void` `int` `string`。
+数组只支持一维。
 
 ### 基本语法
 
@@ -391,21 +391,23 @@ public:
 现在拆成两个节点：
 
 - `NIdentifier` —— 只表示「一个名字」，用于变量引用、函数名
-- `NTypeRef` —— 表示「一个类型」，带名字和数组维度
+- `NTypeRef` —— 表示「一个类型」，带名字和数组长度
 
 ```cpp
 class NTypeRef : public Node {
 public:
-    std::string name;              // "int" / "Point"
-    std::vector<uint64_t> dims;    // 数组各维长度，空表示不是数组
+    std::string name;          // "int" / "string" / "void"
+    uint64_t arraySize = 0;    // 数组长度；0 表示不是数组
 
     NTypeRef() = default;
     explicit NTypeRef(std::string n) : name(std::move(n)) {}
 
+    bool isArray() const { return arraySize > 0; }
+
     std::string label() const override {
         std::string s = name;
-        for (uint64_t d : dims) {
-            s += "[" + std::to_string(d) + "]";
+        if (isArray()) {
+            s += "[" + std::to_string(arraySize) + "]";
         }
         return s;
     }
@@ -423,15 +425,14 @@ public:
 class Symbol {
 public:
     std::string name;
-    SymbolKind kind = SymbolKind::Variable; // 变量 / 函数 / 类型名 / 临时变量 / 常量
+    SymbolKind kind = SymbolKind::Variable; // 变量 / 函数 / 临时变量 / 常量
 
-    std::string typeName;         // 类型：int、Point ...
+    std::string typeName;         // 类型：int / string / void
     llvm::Type* llvmType = nullptr;
-    std::vector<uint64_t> dims;   // 数组各维长度，空表示不是数组
+    uint64_t arraySize = 0;       // 数组长度；0 表示不是数组
 
     bool hasConstant = false;     // 常量的值，优化器用它做常量折叠
-    bool constantIsFloat = false;
-    double constantValue = 0.0;
+    int64_t constantValue = 0;
 
     std::string stringValue;      // 字符串字面量的内容
     bool isString = false;
@@ -439,7 +440,7 @@ public:
 
     Symbol* alias = nullptr;      // 公共子表达式被合并后的别名
 
-    bool isArray() const { return !dims.empty(); }
+    bool isArray() const { return arraySize > 0; }
 };
 ```
 
@@ -481,51 +482,17 @@ llvm::Value* value = ctx_.builder.CreateLoad(
     quad.result->llvmType, elementPtr, "elem");
 ```
 
-多维数组在内存里展平成一维（和 C 的行主序一致）。下标换算：
-
-```
-int[2][3][4] cube        →  展平成 [24 x i32]
-cube[i][j][k]            →  下标 = ((i * 3) + j) * 4 + k
-```
-
-代码里用统一的公式算，因此任意维数都正确（`IntermGen::translateArrayIndex`）：
-
-```cpp
-// 下标 = ((e0 * d1) + e1) * d2 + e2 ...
-Type* intType = types_.typeByName("int");
-Symbol* result = translateExpression(*node.exprs[0]);
-for (size_t i = 1; i < node.exprs.size(); ++i) {
-    Symbol* element = translateExpression(*node.exprs[i]);
-
-    // 这一维的跨度 d_i 是编译期常量，登记成符号表里的常量
-    Symbol* stride = symbols_.newTemporary(SymbolKind::Constant);
-    stride->typeName = "int";
-    stride->llvmType = intType;
-    stride->hasConstant = true;
-    stride->constantValue = static_cast<double>(array.dims[i]);
-
-    Symbol* product = symbols_.newTemporary();
-    emit(QuadOp::Mul, result, stride, product);
-    Symbol* sum = symbols_.newTemporary();
-    emit(QuadOp::Add, product, element, sum);
-    result = sum;
-}
-```
+数组只支持一维，所以下标就是一个表达式，`IntermGen::translateArrayIndex`
+只做两件事：确认变量确实是数组，然后把下标表达式翻译成四元式。
 
 ### 4.5 类型转换
 
-`TypeSystem::cast()` 负责所有隐式类型转换，规则很简单：
+`TypeSystem::cast()` 负责所有隐式类型转换。现在只剩整数类型，所以只有一种转换：
+位宽变窄用 `trunc`，变宽用 `sext`。`string` 和 `void` 不参与数值转换，
+类型不一致时直接报错。
 
-| 源类型 | 目标类型 | 转换 |
-| --- | --- | --- |
-| 整数 | 整数 | 位宽变窄用 `trunc`，变宽用 `sext` |
-| 整数 | 布尔 | `icmp ne 0`（**不能直接截断**，否则 `2` 会变成假） |
-| 整数 | 浮点 | `sitofp`（有符号！用 `uitofp` 会把负数变成很大的正数） |
-| 浮点 | 整数 | `fptosi` |
-| 浮点 | 浮点 | `fpext` / `fptrunc` |
-
-二元运算前会先把两个操作数统一到同一种类型：只要有一边是浮点就都提升到
-`double`，两边都是整数就统一到较宽的那个（至少 32 位）。
+二元运算前会先把两个操作数统一到同一种类型：两边都是整数时统一到较宽的那个
+（至少 32 位）。
 
 ### 4.6 基本块的生成
 
@@ -760,7 +727,7 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 ## 6. 历史上修过的问题
 
 这一节列的是从 LLVM 3.9 时代遗留到现在的问题，也是这份代码里最有意思的部分。
-每一条都有对应的回归测试（见 `tests/testBugfix.input`）。
+能复现的都放在 `tests/testBugfix.input` 里。
 
 ### 语义错误
 
@@ -769,11 +736,8 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | `return` 写在 `if` / `for` 里面不生效 | `NReturnStatement` 只记录了返回值，没有生成 `ret` 指令 |
 | `a < b` 对负数判断错误 | `<` 和 `>` 用了无符号比较（`icmp ult`），而 `<=` `>=` 用的是有符号 |
 | `if (2)` 判断为假 | 转成布尔时把整数截断成了 1 位，`2` 变成 `0` |
-| `a + b` 在负数上出错 | 整数转浮点用了 `uitofp`（无符号），负数会变成巨大的正数 |
 | `a % b` 报「未知运算符」 | 语法和词法都支持取模，但代码生成里漏了 `srem` |
-| 三维及以上的数组下标算错 | 下标换算公式只对两维正确 |
 | 调用后面才定义的函数会崩溃 | 语法分析阶段没有做函数原型收集 |
-| 浮点变量参与运算生成非法 IR | 代码生成只认 `double`，不认 `float` |
 | 比较运算的结果只有 1 位（LLVM 的 i1），当数值用会读到垃圾 | 比较结果要扩展成 int，和 C 一致 |
 | 关系运算符和相等运算符优先级一样 | `1 < 2 == 1` 解析成 `1 < (2 == 1)`，应为 `(1 < 2) == 1` |
 
@@ -782,7 +746,6 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | 问题 | 原因 |
 | --- | --- |
 | 数组变量当数值用会读到垃圾 | 数组变量的「值」就是首元素指针，却又去 load 了一次 |
-| 数组退化成指针时对齐不对导致崩溃 | 按指针类型（i8\*）算出了 align 8，实际数据是 char 数组（align 1） |
 | 分支条件不是 i1，生成的 IR 不合法 | LLVM 的条件跳转要求 i1，比较运算的结果是 int，要先转一下 |
 | else 分支所在的块没有终结指令 | 切换到标号块之前，得先给上一个块补一条跳转 |
 | 公共子表达式被误判 | 找公共子表达式时用的是变量的**名字**做 key，不同作用域的同名变量会被当成同一个 |

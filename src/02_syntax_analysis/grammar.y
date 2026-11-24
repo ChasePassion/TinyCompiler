@@ -33,7 +33,7 @@ void yyerror(const char* s) {
     int token;
 }
 
-%token <text> TIDENTIFIER TINTEGER TDOUBLE TTYPENAME TEXTERN TLITERAL
+%token <text> TIDENTIFIER TINTEGER TTYPENAME TEXTERN TLITERAL
 %token TCEQ TCNE TCLT TCLE TCGT TCGE TEQUAL
 %token TLPAREN TRPAREN TLBRACE TRBRACE TCOMMA TSEMICOLON TLBRACKET TRBRACKET
 %token TPLUS TMINUS TMUL TDIV TMOD
@@ -42,7 +42,7 @@ void yyerror(const char* s) {
 %type <index> array_index
 %type <ident> ident
 %type <type> primary_typename array_typename typename
-%type <expr> numeric expr assign
+%type <expr> expr assign
 %type <varvec> func_decl_args
 %type <exprvec> call_args
 %type <block> program stmts block
@@ -88,18 +88,13 @@ block : TLBRACE stmts TRBRACE { $$ = $2; }
 
 /* ---------------------------------------------------------------- 类型 */
 
-/* 内置类型名（int / double / ...）统一用 TTYPENAME 一个 token 表示，
+/* 内置类型名（int / string / void）统一用 TTYPENAME 一个 token 表示，
    具体是哪种类型由名字决定，类型系统那边去查。 */
 primary_typename : TTYPENAME { $$ = new NTypeRef(*$1); delete $1; }
                 ;
 
 array_typename : primary_typename TLBRACKET TINTEGER TRBRACKET {
-                    $1->dims.push_back(strtoull($3->c_str(), nullptr, 10));
-                    delete $3;
-                    $$ = $1;
-                 }
-                | array_typename TLBRACKET TINTEGER TRBRACKET {
-                    $1->dims.push_back(strtoull($3->c_str(), nullptr, 10));
+                    $1->arraySize = strtoull($3->c_str(), nullptr, 10);
                     delete $3;
                     $$ = $1;
                  }
@@ -168,10 +163,6 @@ ident : TIDENTIFIER { $$ = new NIdentifier(*$1); delete $1; }
 
 /* -------------------------------------------------------------- 表达式 */
 
-numeric : TINTEGER { $$ = new NInteger(strtoll($1->c_str(), nullptr, 10)); delete $1; }
-        | TDOUBLE { $$ = new NDouble(atof($1->c_str())); delete $1; }
-        ;
-
 expr : assign { $$ = $1; }
      | ident TLPAREN call_args TRPAREN {
            std::vector<std::shared_ptr<NExpression>> args = std::move(*$3);
@@ -179,7 +170,7 @@ expr : assign { $$ = $1; }
            $$ = new NMethodCall(std::shared_ptr<NIdentifier>($1), std::move(args));
        }
      | ident { $$ = $1; }
-     | numeric
+     | TINTEGER { $$ = new NInteger(strtoll($1->c_str(), nullptr, 10)); delete $1; }
      | expr TCEQ expr {
            $$ = new NBinaryOperator(std::shared_ptr<NExpression>($1), OP_EQ,
                                     std::shared_ptr<NExpression>($3));
@@ -236,11 +227,7 @@ expr : assign { $$ = $1; }
 
 array_index : ident TLBRACKET expr TRBRACKET {
                    $$ = new NArrayIndex(std::shared_ptr<NIdentifier>($1),
-                                        std::vector<std::shared_ptr<NExpression>>{std::shared_ptr<NExpression>($3)});
-               }
-              | array_index TLBRACKET expr TRBRACKET {
-                   $1->exprs.push_back(std::shared_ptr<NExpression>($3));
-                   $$ = $1;
+                                        std::shared_ptr<NExpression>($3));
                }
               ;
 
