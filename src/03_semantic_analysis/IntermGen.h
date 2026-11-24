@@ -11,7 +11,7 @@
 //
 //   7.1 中间语言      —— 三地址代码 / 四元式（见 Quadruple.h）
 //   7.2 说明语句      —— 变量的说明，登记到符号表
-//   7.3 赋值语句的翻译 —— 变量引用、数组元素引用、记录域引用
+//   7.3 赋值语句的翻译 —— 变量引用、数组元素引用
 //   7.4 布尔表达式的翻译
 //   7.5 控制语句的翻译 —— 用标号和跳转四元式
 //   7.6 过程调用的处理
@@ -42,7 +42,7 @@ private:
 
     // 追加一条四元式
     void emit(QuadOp op, Symbol* arg1, Symbol* arg2, Symbol* result,
-              int label = -1, int fieldIndex = -1);
+              int label = -1);
 
     SymbolTable& symbols_;
     TypeSystem& types_;

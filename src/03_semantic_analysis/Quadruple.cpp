@@ -12,11 +12,6 @@ const char* QuadOpName(QuadOp op) {
     case QuadOp::Div:         return "/";
     case QuadOp::Mod:         return "%";
     case QuadOp::UMinus:      return "uminus";
-    case QuadOp::BitAnd:      return "&";
-    case QuadOp::BitOr:       return "|";
-    case QuadOp::BitXor:      return "^";
-    case QuadOp::Shl:         return "<<";
-    case QuadOp::Shr:         return ">>";
     case QuadOp::Lt:          return "<";
     case QuadOp::Le:          return "<=";
     case QuadOp::Gt:          return ">";
@@ -26,8 +21,6 @@ const char* QuadOpName(QuadOp op) {
     case QuadOp::VarRef:      return "varref";
     case QuadOp::ArrayRef:    return "arrayref";
     case QuadOp::ArraySet:    return "arrayset";
-    case QuadOp::FieldRef:    return "fieldref";
-    case QuadOp::FieldSet:    return "fieldset";
     case QuadOp::Param:       return "param";
     case QuadOp::Call:        return "call";
     case QuadOp::Return:      return "return";
@@ -53,9 +46,6 @@ std::string Quadruple::toString() const {
     }
     if (label >= 0) {
         out << " L" << label;
-    }
-    if (fieldIndex >= 0) {
-        out << " ." << fieldIndex;
     }
     return out.str();
 }

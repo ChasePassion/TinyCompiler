@@ -36,8 +36,6 @@ bool Optimizer::isComputable(QuadOp op) {
     switch (op) {
     case QuadOp::Add: case QuadOp::Sub: case QuadOp::Mul:
     case QuadOp::Div: case QuadOp::Mod:
-    case QuadOp::BitAnd: case QuadOp::BitOr: case QuadOp::BitXor:
-    case QuadOp::Shl: case QuadOp::Shr:
     case QuadOp::Lt: case QuadOp::Le: case QuadOp::Gt:
     case QuadOp::Ge: case QuadOp::Eq: case QuadOp::Ne:
         return true;
@@ -49,7 +47,6 @@ bool Optimizer::isComputable(QuadOp op) {
 double Optimizer::compute(QuadOp op, const Symbol* left, const Symbol* right) {
     double a = left->constantValue;
     double b = right->constantValue;
-    bool isFloat = left->constantIsFloat || right->constantIsFloat;
 
     switch (op) {
     case QuadOp::Add: return a + b;
@@ -57,16 +54,6 @@ double Optimizer::compute(QuadOp op, const Symbol* left, const Symbol* right) {
     case QuadOp::Mul: return a * b;
     case QuadOp::Div: return b == 0 ? 0 : a / b;
     case QuadOp::Mod: return b == 0 ? 0 : std::fmod(a, b);
-    case QuadOp::BitAnd: return isFloat ? 0 : static_cast<double>(
-        static_cast<int64_t>(a) & static_cast<int64_t>(b));
-    case QuadOp::BitOr: return isFloat ? 0 : static_cast<double>(
-        static_cast<int64_t>(a) | static_cast<int64_t>(b));
-    case QuadOp::BitXor: return isFloat ? 0 : static_cast<double>(
-        static_cast<int64_t>(a) ^ static_cast<int64_t>(b));
-    case QuadOp::Shl: return isFloat ? 0 : static_cast<double>(
-        static_cast<int64_t>(a) << static_cast<int64_t>(b));
-    case QuadOp::Shr: return isFloat ? 0 : static_cast<double>(
-        static_cast<int64_t>(a) >> static_cast<int64_t>(b));
     // 比较运算的结果是 0 或 1
     case QuadOp::Lt: return (a < b) ? 1 : 0;
     case QuadOp::Le: return (a <= b) ? 1 : 0;

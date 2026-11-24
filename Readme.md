@@ -188,7 +188,6 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 | --- | --- |
 | `testBasic` | 函数定义与调用、if/else 链、for 循环、变参外部函数 |
 | `testArray` | 一维/二维数组、数组初始化、数组下标 |
-| `testStruct` | 结构体定义、成员访问与赋值、scanf 读字符串 |
 | `testExtern` | 外部函数声明、浮点格式化输出 |
 | `testBugfix` | 专门锁住那些曾经出过问题的行为（见第 6 节） |
 | `testPrecedence` | 运算符优先级和结合性 |
@@ -288,12 +287,12 @@ TinyCompiler/
 语法是 C 的一个子集，但有几处刻意做了简化：
 
 - 语句末尾不写分号
-- 不支持指针类型，但结构体和数组够用
+- 不支持指针类型，但数组够用
 - `if` / `for` / `while` 的 body 必须用大括号
 - 数组初始化用中括号而不是大括号：`int[3] a = [1, 2, 3]`
 - 强制要求写 `return`
 
-支持的数据类型：`void` `int` `float` `double` `char` `bool` `string`，以及自定义结构体。
+支持的数据类型：`void` `int` `float` `double` `char` `bool` `string`。
 数组支持多维。
 
 ### 基本语法
@@ -315,19 +314,6 @@ int main(int argc, string[1] argv){
         printf("i=%d", i)
     }
     return 0
-}
-```
-
-### 结构体
-
-```c
-struct Point{
-    int x
-    int y
-}
-
-int func(struct Point p){
-    return p.x
 }
 ```
 
@@ -404,7 +390,7 @@ public:
 
 现在拆成两个节点：
 
-- `NIdentifier` —— 只表示「一个名字」，用于变量引用、函数名、结构体成员名
+- `NIdentifier` —— 只表示「一个名字」，用于变量引用、函数名
 - `NTypeRef` —— 表示「一个类型」，带名字和数组维度
 
 ```cpp
@@ -657,7 +643,7 @@ $ echo $?
 顺序完全照 C 语言来：
 
 ```
-赋值 < | < ^ < & < == != < < <= > >= < << >> < + - < * / %
+赋值 < == != < < <= > >= < + - < * / %
 ```
 
 **这里有个坑**：如果把一堆运算符写进一个 `comparison` 之类的中间非终结符，
@@ -670,14 +656,13 @@ bison 就没法用优先级消解冲突（会报一堆 "useless associativity"�
 bison -Wall -d -o grammar.cpp grammar.y
 ```
 
-目前还剩 **6 个 shift/reduce 冲突**，都是 C 类语法在 LALR(1) 下的固有歧义，
+目前还剩 **4 个 shift/reduce 冲突**，都是 C 类语法在 LALR(1) 下的固有歧义，
 bison 默认按 shift 消解，正好符合 C 的行为：
 
 | 冲突 | 为什么消不掉 |
 | --- | --- |
-| `ident (` ×2 | 是函数调用还是函数声明？真实编译器要靠语法分析器里的符号表才能区分 |
-| `TMINUS` ×2 | 一元负号还是二元减号？用 `%prec UMINUS` 解决 |
-| `TTYPENAME` / `TSTRUCT` ×2 | 结构体成员列表可以为空，空规则和「开始一个新成员」二选一 |
+| `ident (` ×2 | 是函数调用/函数声明，还是「变量声明 + 括号表达式」？语句之间没有分隔符 |
+| `TMINUS` ×2 | `a - b` 是二元减法，还是两条语句（`a` 和 `-b`）？同样缺少语句分隔符 |
 
 （原始版本的语法文件有 **143 个**冲突，因为 Makefile 里没给 bison 加 `-Wall`，
 一直静默着。）
@@ -695,7 +680,6 @@ public:
     Symbol* result;        // 结果
 
     int label = -1;        // 跳转语句的目标标号
-    int fieldIndex = -1;   // 结构体域的序号
 };
 ```
 
@@ -706,7 +690,6 @@ public:
 | `x := y` | `:=` arg1=y, result=x |
 | `x := y + z` | `+` arg1=y, arg2=z, result=T1；`:=` arg1=T1, result=x |
 | `x := y[i]` | `arrayref` arg1=y, arg2=i, result=T1 |
-| `x := y.f` | `fieldref` arg1=y, result=T1 |
 | `f(a, b)` | `param` a；`param` b；`call` f, result=T1 |
 | `if (e) S1 else S2` | `iffalse` e, L1；S1；`goto` L2；`label` L1；S2；`label` L2 |
 | `for (i; c; s) B` | S；`label` L1；c；`iffalse` c, L2；B；s；`goto` L1；`label` L2 |
@@ -754,9 +737,8 @@ pwsh -File tests/run_tests.ps1 -BuildDir build
 [PASS] testBugfix
 [PASS] testExtern
 [PASS] testPrecedence
-[PASS] testStruct
 
-通过 7 个，失败 0 个，跳过 0 个
+通过 6 个，失败 0 个，跳过 0 个
 ```
 
 `tests/testBugfix.input` 专门用来锁住那些曾经出过问题的行为，改动代码生成

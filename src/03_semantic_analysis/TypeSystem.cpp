@@ -23,37 +23,7 @@ Type* TypeSystem::typeByName(const std::string& name) const {
     if (builtin != builtins_.end()) {
         return builtin->second;
     }
-    auto structIt = structs_.find(name);
-    if (structIt != structs_.end()) {
-        return structIt->second;
-    }
     return nullptr;
-}
-
-void TypeSystem::addStructType(const std::string& name, StructType* type) {
-    structs_[name] = type;
-    structMembers_[name].clear();
-}
-
-void TypeSystem::addStructMember(const std::string& structName,
-                                  const std::string& memberType,
-                                  const std::string& memberName) {
-    structMembers_[structName].push_back(std::make_pair(memberType, memberName));
-}
-
-long TypeSystem::getStructMemberIndex(const std::string& structName,
-                                       const std::string& memberName) const {
-    auto it = structMembers_.find(structName);
-    if (it == structMembers_.end()) {
-        return -1;
-    }
-    const auto& members = it->second;
-    for (size_t i = 0; i < members.size(); ++i) {
-        if (members[i].second == memberName) {
-            return static_cast<long>(i);
-        }
-    }
-    return -1;
 }
 
 Value* TypeSystem::cast(Value* value, Type* targetType, IRBuilder<>& builder) {

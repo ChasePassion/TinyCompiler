@@ -41,7 +41,6 @@ int currentLine = 1;
 "return"                return TOKEN(TRETURN);
 "for"                   return TOKEN(TFOR);
 "while"                 return TOKEN(TWHILE);
-"struct"                return TOKEN(TSTRUCT);
 "int"|"double"|"float"|"char"|"bool"|"string"|"void" {
                            // 内置类型名统一用 TTYPENAME，具体哪种类型由名字决定
                            SAVE_TOKEN; return TTYPENAME;
@@ -59,8 +58,6 @@ int currentLine = 1;
 "!="                    return TOKEN(TCNE);
 "<="                    return TOKEN(TCLE);
 ">="                    return TOKEN(TCGE);
-"<<"                    return TOKEN(TSHIFTL);
-">>"                    return TOKEN(TSHIFTR);
 "<"                     return TOKEN(TCLT);
 ">"                     return TOKEN(TCGT);
 "="                     return TOKEN(TEQUAL);
@@ -70,21 +67,17 @@ int currentLine = 1;
 "}"                     return TOKEN(TRBRACE);
 "["                     return TOKEN(TLBRACKET);
 "]"                     return TOKEN(TRBRACKET);
-"."                     return TOKEN(TDOT);
 ","                     return TOKEN(TCOMMA);
 "+"                     return TOKEN(TPLUS);
 "-"                     return TOKEN(TMINUS);
 "*"                     return TOKEN(TMUL);
 "/"                     return TOKEN(TDIV);
-"&"                     return TOKEN(TAND);
-"|"                     return TOKEN(TOR);
-"^"                     return TOKEN(TXOR);
 "%"                     return TOKEN(TMOD);
 ";"                     return TOKEN(TSEMICOLON);
 .                       {
                            fprintf(stderr, "error: 第 %d 行: 无法识别的字符 '%s'\n",
                                    currentLine, yytext);
                            yyterminate();
-                       }
+                         }
 
 %%

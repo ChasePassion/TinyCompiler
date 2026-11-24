@@ -9,11 +9,6 @@ std::string OpName(BinOp op) {
     case OP_MUL: return "*";
     case OP_DIV: return "/";
     case OP_MOD: return "%";
-    case OP_AND: return "&";
-    case OP_OR:  return "|";
-    case OP_XOR: return "^";
-    case OP_SHL: return "<<";
-    case OP_SHR: return ">>";
     case OP_LT:  return "<";
     case OP_LE:  return "<=";
     case OP_GT:  return ">";

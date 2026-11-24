@@ -29,13 +29,10 @@ enum class QuadOp {
     Assign,       // :=
     Add, Sub, Mul, Div, Mod,
     UMinus,       // 一元负
-    BitAnd, BitOr, BitXor, Shl, Shr,
     Lt, Le, Gt, Ge, Eq, Ne,
     VarRef,       // x := y        取变量的值
     ArrayRef,     // x := y[i]     取数组元素
     ArraySet,     // y[i] := x     给数组元素赋值
-    FieldRef,     // x := y.f      取结构体的域
-    FieldSet,     // y.f := x      给结构体的域赋值
     Param,        // 传递实参
     Call,         // x := f(...)
     Return,       // return x
@@ -58,9 +55,6 @@ public:
     // 跳转语句的目标标号。教材里标号是放在 result 域中的整数，
     // 这里单独用一个域表示，含义一样。
     int label = -1;
-
-    // 结构体域的序号（FieldRef 用）
-    int fieldIndex = -1;
 
     std::string toString() const;
 };

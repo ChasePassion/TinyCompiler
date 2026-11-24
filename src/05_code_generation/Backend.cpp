@@ -181,39 +181,8 @@ void Backend::translateQuad(const Quadruple& quad) {
         break;
     }
 
-    case QuadOp::FieldRef: {
-        Value* base = addressOf(quad.arg1);
-        if (!base) {
-            return;
-        }
-        std::vector<Value*> indices{ctx_.builder.getInt32(0),
-                                    ctx_.builder.getInt32(quad.fieldIndex)};
-        Value* memberPtr = ctx_.builder.CreateInBoundsGEP(
-            quad.arg1->llvmType, base, indices, "member");
-        Value* value = ctx_.builder.CreateLoad(quad.result->llvmType, memberPtr, "member");
-        ctx_.builder.CreateStore(value, addressOf(quad.result));
-        break;
-    }
-
-    case QuadOp::FieldSet: {
-        Value* base = addressOf(quad.result);
-        Value* value = valueOf(quad.arg1);
-        if (!base || !value) {
-            return;
-        }
-        value = ctx_.typeSystem.cast(value, memberTypeOf(quad), ctx_.builder);
-        std::vector<Value*> indices{ctx_.builder.getInt32(0),
-                                    ctx_.builder.getInt32(quad.fieldIndex)};
-        Value* memberPtr = ctx_.builder.CreateInBoundsGEP(
-            quad.result->llvmType, base, indices, "member");
-        ctx_.builder.CreateStore(value, memberPtr);
-        break;
-    }
-
     case QuadOp::Add: case QuadOp::Sub: case QuadOp::Mul:
-    case QuadOp::Div: case QuadOp::Mod:
-    case QuadOp::BitAnd: case QuadOp::BitOr: case QuadOp::BitXor:
-    case QuadOp::Shl: case QuadOp::Shr: {
+    case QuadOp::Div: case QuadOp::Mod: {
         Value* left = valueOf(quad.arg1);
         Value* right = valueOf(quad.arg2);
         if (!left || !right) {
@@ -236,11 +205,6 @@ void Backend::translateQuad(const Quadruple& quad) {
         case QuadOp::Div:  value = isFloat ? ctx_.builder.CreateFDiv(left, right, "div")
                                            : ctx_.builder.CreateSDiv(left, right, "div"); break;
         case QuadOp::Mod:  value = ctx_.builder.CreateSRem(left, right, "mod"); break;
-        case QuadOp::BitAnd: value = ctx_.builder.CreateAnd(left, right, "and"); break;
-        case QuadOp::BitOr:  value = ctx_.builder.CreateOr(left, right, "or"); break;
-        case QuadOp::BitXor: value = ctx_.builder.CreateXor(left, right, "xor"); break;
-        case QuadOp::Shl: value = ctx_.builder.CreateShl(left, right, "shl"); break;
-        case QuadOp::Shr: value = ctx_.builder.CreateAShr(left, right, "shr"); break;
         default: break;
         }
         if (value) {
@@ -475,19 +439,6 @@ llvm::Value* Backend::stringConstant(Symbol* symbol) {
     llvm::Value* global = ctx_.builder.CreateGlobalString(symbol->stringValue, "str");
     stringGlobals_[symbol] = global;
     return global;
-}
-
-llvm::Type* Backend::memberTypeOf(const Quadruple& quad) {
-    Type* type = quad.result->llvmType;
-    if (!type || !type->isStructTy()) {
-        return nullptr;
-    }
-    auto* structType = llvm::cast<llvm::StructType>(type);
-    if (quad.fieldIndex < 0 ||
-        static_cast<unsigned>(quad.fieldIndex) >= structType->getNumElements()) {
-        return nullptr;
-    }
-    return structType->getStructElementType(quad.fieldIndex);
 }
 
 llvm::BasicBlock* Backend::blockOf(int label) {

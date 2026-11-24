@@ -12,7 +12,6 @@
 // 语法分析器生成的头文件，AST 可以独立地打印、序列化、单元测试。
 enum BinOp {
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD,
-    OP_AND, OP_OR, OP_XOR, OP_SHL, OP_SHR,
     OP_LT, OP_LE, OP_GT, OP_GE, OP_EQ, OP_NE
 };
 
@@ -46,7 +45,6 @@ public:
 // 类型引用
 //
 // int / double / float / char / bool / string / void
-// struct Point
 // int[3][4]
 //
 // 数组维度存放在这里，变量本身（NIdentifier）不再需要 isType / isArray 标志位。
@@ -115,7 +113,7 @@ public:
     }
 };
 
-// 标识符（变量名 / 函数名 / 结构体成员名）
+// 标识符（变量名 / 函数名）
 class NIdentifier : public NExpression {
 public:
     std::string name;
@@ -184,22 +182,6 @@ public:
     }
 };
 
-// 结构体成员访问 p.x
-class NStructMember : public NExpression {
-public:
-    std::shared_ptr<NIdentifier> id;      // 结构体变量
-    std::shared_ptr<NIdentifier> member;  // 成员名
-
-    NStructMember() = default;
-    NStructMember(std::shared_ptr<NIdentifier> i, std::shared_ptr<NIdentifier> m)
-        : id(std::move(i)), member(std::move(m)) {}
-
-    std::string label() const override { return "NStructMember"; }
-    std::vector<Node*> children() const override {
-        return {id.get(), member.get()};
-    }
-};
-
 // 数组元素 arr[i][j]
 class NArrayIndex : public NExpression {
 public:
@@ -234,22 +216,6 @@ public:
     std::string label() const override { return "NArrayAssignment"; }
     std::vector<Node*> children() const override {
         return {index.get(), expression.get()};
-    }
-};
-
-// 结构体成员赋值 p.x = v
-class NStructAssignment : public NExpression {
-public:
-    std::shared_ptr<NStructMember> member;
-    std::shared_ptr<NExpression> expression;
-
-    NStructAssignment() = default;
-    NStructAssignment(std::shared_ptr<NStructMember> m, std::shared_ptr<NExpression> e)
-        : member(std::move(m)), expression(std::move(e)) {}
-
-    std::string label() const override { return "NStructAssignment"; }
-    std::vector<Node*> children() const override {
-        return {member.get(), expression.get()};
     }
 };
 
@@ -341,28 +307,6 @@ public:
         }
         if (body) {
             out.push_back(body.get());
-        }
-        return out;
-    }
-};
-
-// 结构体声明 struct Point { ... }
-class NStructDeclaration : public NStatement {
-public:
-    std::shared_ptr<NIdentifier> name;
-    std::vector<std::shared_ptr<NVariableDeclaration>> members;
-
-    NStructDeclaration() = default;
-    NStructDeclaration(std::shared_ptr<NIdentifier> n,
-                       std::vector<std::shared_ptr<NVariableDeclaration>> m)
-        : name(std::move(n)), members(std::move(m)) {}
-
-    std::string label() const override { return "NStructDeclaration"; }
-    std::vector<Node*> children() const override {
-        std::vector<Node*> out;
-        out.push_back(name.get());
-        for (auto& m : members) {
-            out.push_back(m.get());
         }
         return out;
     }

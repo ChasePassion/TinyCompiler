@@ -59,8 +59,6 @@ private:
     llvm::Value* stringConstant(Symbol* symbol);
     // 标号对应的基本块
     llvm::BasicBlock* blockOf(int label);
-    // 结构体成员的类型
-    llvm::Type* memberTypeOf(const Quadruple& quad);
 
     CodeGenContext& ctx_;
     llvm::Function* currentFunction_ = nullptr;

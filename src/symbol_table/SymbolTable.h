@@ -22,7 +22,6 @@
 enum class SymbolKind {
     Variable,   // 变量
     Function,   // 函数（过程）
-    TypeName,   // 类型名
     Temporary,  // 编译期引进的临时变量，也就是教材四元式里的 T1、T2
     Constant    // 字面量常量
 };

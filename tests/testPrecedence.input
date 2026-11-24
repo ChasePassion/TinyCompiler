@@ -21,15 +21,6 @@ int main(){
     printf("%d\n", -5 + 1)
     printf("%d\n", -5 - 3)
 
-    # 位运算
-    printf("%d\n", 6 & 3)
-    printf("%d\n", 6 | 3)
-    printf("%d\n", 6 ^ 3)
-
-    # 移位
-    printf("%d\n", 1 << 4)
-    printf("%d\n", 32 >> 2)
-
     # 取模和比较混在一起
     printf("%d\n", 17 % 5 == 2)
 

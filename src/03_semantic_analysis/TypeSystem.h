@@ -8,33 +8,18 @@
 
 #include <map>
 #include <string>
-#include <utility>
-#include <vector>
-
-#include "ASTNodes.h"
 
 // 类型系统：维护「源语言类型名」到「LLVM 类型」的对应关系，以及隐式转换规则。
 //
 // 源语言支持的内置类型：
 //   int(32 位有符号整数) float(单精度) double(双精度)
 //   char(8 位整数) bool(1 位) string(char*) void
-// 另外还支持用户定义的结构体。
 class TypeSystem {
 public:
     explicit TypeSystem(llvm::LLVMContext& context);
 
-    // 上下文（创建结构体类型时要用）
-    llvm::LLVMContext& context() const { return context_; }
-
-    // 按类型名查找 LLVM 类型（内置类型或结构体），找不到返回 nullptr
+    // 按类型名查找 LLVM 类型，找不到返回 nullptr
     llvm::Type* typeByName(const std::string& name) const;
-
-    // 结构体
-    void addStructType(const std::string& name, llvm::StructType* type);
-    void addStructMember(const std::string& structName, const std::string& memberType,
-                         const std::string& memberName);
-    // 成员在结构体里的下标，找不到返回 -1
-    long getStructMemberIndex(const std::string& structName, const std::string& memberName) const;
 
     // 隐式类型转换。无法转换时打印错误并原样返回。
     llvm::Value* cast(llvm::Value* value, llvm::Type* targetType, llvm::IRBuilder<>& builder);
@@ -47,8 +32,6 @@ public:
 private:
     llvm::LLVMContext& context_;
     std::map<std::string, llvm::Type*> builtins_;
-    std::map<std::string, llvm::StructType*> structs_;
-    std::map<std::string, std::vector<std::pair<std::string, std::string>>> structMembers_;
 };
 
 // 把 LLVM 类型翻译成可读的名字，用于错误信息

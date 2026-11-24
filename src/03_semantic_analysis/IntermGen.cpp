@@ -15,14 +15,13 @@ int IntermGen::newLabel() {
 }
 
 void IntermGen::emit(QuadOp op, Symbol* arg1, Symbol* arg2, Symbol* result,
-                      int label, int fieldIndex) {
+                      int label) {
     Quadruple quad;
     quad.op = op;
     quad.arg1 = arg1;
     quad.arg2 = arg2;
     quad.result = result;
     quad.label = label;
-    quad.fieldIndex = fieldIndex;
     current_->quads.push_back(quad);
 }
 
@@ -30,8 +29,6 @@ IntermediateCode IntermGen::generate(NBlock& root) {
     for (auto& statement : root.statements) {
         if (auto* function = dynamic_cast<NFunctionDeclaration*>(statement.get())) {
             translateFunction(*function);
-        } else if (auto* structure = dynamic_cast<NStructDeclaration*>(statement.get())) {
-            translateStatement(*structure);
         }
     }
     return std::move(code_);
@@ -107,11 +104,6 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
         case OP_MUL: temp->llvmType = unified; emit(QuadOp::Mul, left, right, temp); break;
         case OP_DIV: temp->llvmType = unified; emit(QuadOp::Div, left, right, temp); break;
         case OP_MOD: temp->llvmType = unified; emit(QuadOp::Mod, left, right, temp); break;
-        case OP_AND: temp->llvmType = unified; emit(QuadOp::BitAnd, left, right, temp); break;
-        case OP_OR:  temp->llvmType = unified; emit(QuadOp::BitOr, left, right, temp); break;
-        case OP_XOR: temp->llvmType = unified; emit(QuadOp::BitXor, left, right, temp); break;
-        case OP_SHL: temp->llvmType = unified; emit(QuadOp::Shl, left, right, temp); break;
-        case OP_SHR: temp->llvmType = unified; emit(QuadOp::Shr, left, right, temp); break;
         // 比较运算的结果是 int（0 或 1），和 C 一样
         case OP_LT: temp->llvmType = types_.typeByName("int"); emit(QuadOp::Lt, left, right, temp); break;
         case OP_LE: temp->llvmType = types_.typeByName("int"); emit(QuadOp::Le, left, right, temp); break;
@@ -174,27 +166,6 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
         emit(QuadOp::Call, function, nullptr, temp);
         return temp;    }
 
-    // 结构体成员引用（教材 7.3.3）
-    if (auto* n = dynamic_cast<NStructMember*>(&node)) {
-        Symbol* variable = symbols_.lookup(n->id->name);
-        if (!variable) {
-            LogError("未定义的变量：" + n->id->name);
-            return nullptr;
-        }
-        long index = types_.getStructMemberIndex(variable->typeName, n->member->name);
-        if (index < 0) {
-            LogError("结构体 " + variable->typeName + " 里没有成员 " + n->member->name);
-            return nullptr;
-        }
-        Symbol* temp = symbols_.newTemporary();
-        // 成员的类型从结构体类型里取
-        auto* structType = llvm::cast<llvm::StructType>(types_.typeByName(variable->typeName));
-        temp->llvmType = structType->getStructElementType(index);
-        temp->typeName = variable->typeName;
-        emit(QuadOp::FieldRef, variable, nullptr, temp, -1, static_cast<int>(index));
-        return temp;
-    }
-
     // 数组元素引用（教材 7.3.2）
     if (auto* n = dynamic_cast<NArrayIndex*>(&node)) {
         Symbol* variable = symbols_.lookup(n->arrayName->name);
@@ -229,26 +200,6 @@ Symbol* IntermGen::translateExpression(NExpression& node) {
             return nullptr;
         }
         emit(QuadOp::ArraySet, value, index, variable);
-        return value;
-    }
-
-    // 结构体成员赋值
-    if (auto* n = dynamic_cast<NStructAssignment*>(&node)) {
-        Symbol* variable = symbols_.lookup(n->member->id->name);
-        if (!variable) {
-            LogError("未定义的变量：" + n->member->id->name);
-            return nullptr;
-        }
-        long index = types_.getStructMemberIndex(variable->typeName, n->member->member->name);
-        if (index < 0) {
-            LogError("结构体 " + variable->typeName + " 里没有成员 " + n->member->member->name);
-            return nullptr;
-        }
-        Symbol* value = translateExpression(*n->expression);
-        if (!value) {
-            return nullptr;
-        }
-        emit(QuadOp::FieldSet, value, nullptr, variable, -1, static_cast<int>(index));
         return value;
     }
 
@@ -421,27 +372,6 @@ void IntermGen::translateStatement(NStatement& node) {
         }
         emit(QuadOp::Jump, nullptr, nullptr, nullptr, condLabel);
         emit(QuadOp::Label, nullptr, nullptr, nullptr, endLabel);
-        return;
-    }
-
-    // 结构体说明：在类型系统里登记结构体类型
-    if (auto* n = dynamic_cast<NStructDeclaration*>(&node)) {
-        std::vector<Type*> memberTypes;
-        for (auto& member : n->members) {
-            Type* type = types_.typeByName(member->type->name);
-            if (!type) {
-                LogError("未知的成员类型：" + member->type->name);
-                return;
-            }
-            memberTypes.push_back(type);
-        }
-        StructType* structType = StructType::create(types_.context(), n->name->name);
-        types_.addStructType(n->name->name, structType);
-        for (auto& member : n->members) {
-            types_.addStructMember(n->name->name, member->type->name, member->id->name);
-        }
-        structType->setBody(memberTypes);
-        symbols_.define(n->name->name, SymbolKind::TypeName);
         return;
     }
 }
